@@ -94,10 +94,13 @@ interface TableProps {
     /** Container height; the original pages use the default 800. */
     tableHeight?: number | string;
     /**
-     * Fires when the user toggles columns via the grid's own column panel so
-     * the owner can persist the change (only used with columnSettings).
+     * Fires when the user changes column visibility or order from the grid's
+     * own columns panel. Carries the complete next settings array, so the
+     * owner only has to persist it — and so a toggle and a reorder can never
+     * race each other into a half-applied config (only used with
+     * columnSettings).
      */
-    onColumnVisibilityChange?: (model: GridColumnVisibilityModel) => void;
+    onColumnSettingsChange?: (settings: EventTableColumnSetting[]) => void;
 }
 
 
@@ -114,7 +117,7 @@ export default function EventTable({
                                        dateRange,
                                        extraRowActions,
                                        tableHeight = 800,
-                                       onColumnVisibilityChange,
+                                       onColumnSettingsChange,
                                    }: TableProps) {
 
     const nodes = useSelector(selectNodes);
@@ -909,6 +912,17 @@ export default function EventTable({
             .map((column) => column.field);
     };
 
+    const handleColumnVisibilityModelChange = (model: GridColumnVisibilityModel) => {
+        // Tracked even when the grid is uncontrolled: the optional Vehicle ID
+        // column gates its OCR fetch on being switched on.
+        setColumnVisibilityModel(model);
+        if (!columnSettings) return;
+        // The model only carries the fields the panel showed, so fold it onto
+        // the resolved settings rather than rebuilding from it.
+        onColumnSettingsChange?.(resolveEventTableColumns(columnSettings).map((col) =>
+            model[col.key] !== undefined ? {...col, visible: !!model[col.key]} : col));
+    };
+
     const handleAlarmFilterChange = useCallback((next: AlarmFilterState) => {
         setAlarmFilter(next);
         setPaginationModel(prev => ({ ...prev, page: 0 }));
@@ -1190,12 +1204,7 @@ export default function EventTable({
                 rowCount={rowCount}
                 columns={orderedColumns}
                 columnVisibilityModel={columnVisibilityModel}
-                // Tracked even when the grid is uncontrolled: the optional
-                // Vehicle ID column gates its OCR fetch on being switched on.
-                onColumnVisibilityModelChange={(model: GridColumnVisibilityModel) => {
-                    setColumnVisibilityModel(model);
-                    if (columnSettings) onColumnVisibilityChange?.(model);
-                }}
+                onColumnVisibilityModelChange={handleColumnVisibilityModelChange}
                 onRowClick={handleRowSelection}
                 onRowDoubleClick={handleRowDoubleClick}
                 rowSelectionModel={selectionModel}
@@ -1216,16 +1225,6 @@ export default function EventTable({
                 initialState={{
                     sorting: {
                         sortModel: [{field: 'startTime', sort: 'desc'}]
-                    },
-                    columns: {
-                        // Manage visible columns in table based on component parameters
-                        columnVisibilityModel: {
-                            adjudicatedIds: viewAdjudicated && tableMode !== 'alarmtable',
-                            adjudicationGroup: tableMode === 'alarmtable',
-                            secondaryInspection: tableMode === 'alarmtable',
-                            // Optional: off until turned on from the columns panel.
-                            vehicleId: false,
-                        },
                     },
                 }}
                 autosizeOptions={{

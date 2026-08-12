@@ -7,14 +7,13 @@
 
 import React, {useState} from "react";
 import {useSelector} from "react-redux";
-import {GridActionsCellItem, GridColumnVisibilityModel} from "@mui/x-data-grid";
+import {GridActionsCellItem} from "@mui/x-data-grid";
 import GavelRoundedIcon from "@mui/icons-material/GavelRounded";
 import EventTable from "@/app/_components/event-table/EventTable";
 import AdjudicationDialog from "./AdjudicationDialog";
 import {RootState} from "@/lib/state/Store";
 import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
-import {EventTableWidgetConfig} from "@/lib/layout/PageConfigTypes";
-import {resolveEventTableColumns} from "@/lib/layout/EventTableColumns";
+import {EventTableColumnSetting, EventTableWidgetConfig} from "@/lib/layout/PageConfigTypes";
 import {updateWidgetConfig} from "@/lib/state/PageLayoutSlice";
 import {useAppDispatch} from "@/lib/state/Hooks";
 import {WidgetProps} from "@/app/_components/layout/WidgetTypes";
@@ -35,15 +34,13 @@ export function ConfigurableEventTable({page, widget, adjudicationMode}: WidgetP
 
     const filters = config.filters ?? {lanes: {mode: 'all'}};
 
-    // Toggles made in the grid's own column panel must survive reload: fold
+    // Column changes made in the grid's own panel must survive reload: fold
     // them back into the widget's persisted config.
-    const handleColumnVisibilityChange = (model: GridColumnVisibilityModel) => {
-        const next = resolveEventTableColumns(config.columns).map((col) =>
-            model[col.key] !== undefined ? {...col, visible: !!model[col.key]} : col);
+    const handleColumnSettingsChange = (columns: EventTableColumnSetting[]) => {
         dispatch(updateWidgetConfig({
             pageId: page.id,
             widgetId: widget.id,
-            config: {...config, columns: next},
+            config: {...config, columns},
         }));
     };
 
@@ -60,7 +57,7 @@ export function ConfigurableEventTable({page, widget, adjudicationMode}: WidgetP
                 adjudicatedFilter={filters.adjudicated}
                 dateRange={filters.dateRange}
                 tableHeight="100%"
-                onColumnVisibilityChange={handleColumnVisibilityChange}
+                onColumnSettingsChange={handleColumnSettingsChange}
                 extraRowActions={adjudicationMode ? (row: EventTableData) => [
                     <GridActionsCellItem
                         key="adjudicate"
