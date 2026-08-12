@@ -49,15 +49,24 @@ const COLUMN_LABEL_KEYS: Record<string, string> = {
     adjudicatedIds: 'adjudicated',
     adjudicationGroup: 'adjudicationStatus',
     secondaryInspection: 'secondaryInspection',
+    vehicleId: 'vehicleId',
 };
 
 export default function EventTableConfigForm({draft, onChange}: WidgetConfigFormProps) {
     const config = draft as EventTableWidgetConfig;
     const {t} = useLanguage();
 
-    const columns: EventTableColumnSetting[] = config.columns?.length
+    const savedColumns: EventTableColumnSetting[] = config.columns?.length
         ? config.columns
         : DEFAULT_EVENT_TABLE_COLUMNS.map((c) => ({...c}));
+    // Configs written before a column existed have no entry for it; append the
+    // missing ones at their default visibility so newly added columns are
+    // configurable on existing widgets rather than only on fresh ones.
+    const savedKeys = new Set(savedColumns.map((c) => c.key));
+    const columns: EventTableColumnSetting[] = [
+        ...savedColumns,
+        ...DEFAULT_EVENT_TABLE_COLUMNS.filter((c) => !savedKeys.has(c.key)).map((c) => ({...c})),
+    ];
     const filters = config.filters ?? {lanes: {mode: 'all' as const}};
 
     const setColumns = (next: EventTableColumnSetting[]) => onChange({...config, columns: next});

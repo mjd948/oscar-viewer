@@ -403,6 +403,10 @@ export class LaneDSColl {
      * Distinct from the legacy (unpopulated) adjRT slot.
      */
     adjStatusRT: typeof ConSysApi[];
+    // Only present on lanes with OCR enabled, but the array must exist on every
+    // collection: addDS() calls getDSArray(name).some(...), which throws on an
+    // undeclared name rather than degrading.
+    vehicleOcrRT: typeof ConSysApi[];
 
     constructor() {
         this.occRT = [];
@@ -435,6 +439,7 @@ export class LaneDSColl {
         this.radStatusRT = [];
         this.radStatusBatch = [];
         this.adjStatusRT = [];
+        this.vehicleOcrRT = [];
     }
 
     getDSArray(propName: string): typeof ConSysApi[] {
@@ -470,6 +475,7 @@ export class LaneDSColl {
             'rs350AlarmRT',
             'radStatusRT',
             'adjStatusRT',
+            'vehicleOcrRT',
             'forgroundBatch',
             'backgroundBatch',
             'rs350AlarmBatch',
@@ -520,6 +526,12 @@ export class LaneDSColl {
 
     addDS(propName: string, ds: typeof ConSysApi) {
         let dsArr = this.getDSArray(propName);
+        if (!dsArr) {
+            // A stream name with no backing array is a wiring mistake, but it
+            // should not take down every widget that touches the registry.
+            console.warn(`[LaneDSColl] no datasource array for '${propName}'; ignoring`);
+            return;
+        }
         if (dsArr.some((d) => d.name == ds.name)) {
             return;
         } else {

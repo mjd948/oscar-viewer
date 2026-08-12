@@ -15,12 +15,13 @@ import {
     isRs350AlarmDataStream,
     isTamperDataStream,
     isThresholdDataStream,
+    isVehicleOcrDataStream,
 } from "@/lib/data/oscar/Utilities";
 import {LaneSelection} from "@/lib/layout/PageConfigTypes";
 
 // NOTE: stream names double as LaneDSColl property names (see buildColl/addDS),
 // so a new name here must have a matching array slot in LaneDSColl.
-export type LaneStreamName = 'connectionRT' | 'gammaRT' | 'neutronRT' | 'tamperRT' | 'gammaTrshldRT' | 'occRT' | 'locRT' | 'rs350AlarmRT' | 'radStatusRT' | 'adjStatusRT';
+export type LaneStreamName = 'connectionRT' | 'gammaRT' | 'neutronRT' | 'tamperRT' | 'gammaTrshldRT' | 'occRT' | 'locRT' | 'rs350AlarmRT' | 'radStatusRT' | 'adjStatusRT' | 'vehicleOcrRT';
 
 export type LaneStreamHandler = (laneId: string, stream: LaneStreamName, message: any) => void;
 
@@ -56,7 +57,7 @@ interface LaneEntry {
     channels: Map<LaneStreamName, StreamChannel>;
 }
 
-const ALL_STREAM_NAMES: LaneStreamName[] = ['connectionRT', 'gammaRT', 'neutronRT', 'tamperRT', 'gammaTrshldRT', 'occRT', 'locRT', 'rs350AlarmRT', 'radStatusRT', 'adjStatusRT'];
+const ALL_STREAM_NAMES: LaneStreamName[] = ['connectionRT', 'gammaRT', 'neutronRT', 'tamperRT', 'gammaTrshldRT', 'occRT', 'locRT', 'rs350AlarmRT', 'radStatusRT', 'adjStatusRT', 'vehicleOcrRT'];
 
 /**
  * A lane with no message on ANY of its streams for this long has lost comms.
@@ -101,6 +102,8 @@ class LaneStreamRegistryImpl {
             if (isLocationDataStream(ds)) coll.addDS('locRT', rtDS);
             if (isRs350AlarmDataStream(ds)) coll.addDS('rs350AlarmRT', rtDS);
             if (isD5RadiometricStatusDataStream(ds)) coll.addDS('radStatusRT', rtDS);
+            // Only lanes with OCR enabled expose this one.
+            if (isVehicleOcrDataStream(ds)) coll.addDS('vehicleOcrRT', rtDS);
         });
 
         // Adjudications arrive as command statuses on a CONTROL stream, so

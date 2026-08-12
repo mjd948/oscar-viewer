@@ -2,7 +2,7 @@
 
 import { LaneMapEntry } from "@/lib/data/oscar/LaneCollection";
 import { useCallback, useEffect, useState, useMemo, useRef } from "react";
-import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Snackbar } from "@mui/material";
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Snackbar, Tooltip, Typography } from "@mui/material";
 import { useSelector } from "react-redux";
 import {
     setEventPreview,
@@ -20,6 +20,7 @@ import {
     GridCellParams,
     gridClasses,
     GridColDef,
+    GridRenderCellParams,
     GridRowParams,
     GridRowSelectionModel
 } from "@mui/x-data-grid";
@@ -52,6 +53,7 @@ import {
     AdjudicationByOccupancy,
     DEFAULT_ADJ_LOOKBACK_MS
 } from "@/app/_components/event-table/useAdjudicationMap";
+import {useVehicleOcrMap, VehicleOcrByOccupancy} from "@/app/_components/event-table/useVehicleOcrMap";
 import { AdjudicationCodes } from "@/lib/data/oscar/adjudication/models/AdjudicationConstants";
 import { EventTableColumnSetting, LaneSelection } from "@/lib/layout/PageConfigTypes";
 import { resolveLaneSelection } from "@/lib/data/oscar/streams/LaneStreamRegistry";
@@ -141,9 +143,40 @@ export default function EventTable({
         return new Set(resolveLaneSelection(laneFilter, stableLaneMap));
     }, [laneFilter, stableLaneMap]);
 
+    const columnSettingsKey = columnSettings ? JSON.stringify(columnSettings) : null;
+    const [columnVisibilityModel, setColumnVisibilityModel] = useState<GridColumnVisibilityModel>({});
+    // Always populated, and always the grid's controlled model. The grid treats
+    // a field ABSENT from the model as visible, so a partial model shows columns
+    // that anything reading the model believes are hidden — which is how the
+    // Vehicle ID column rendered while the OCR fetch backing it stayed off.
+    // Keeping every field explicit makes this the single source of truth for
+    // both what is on screen and what data needs loading.
+    useEffect(() => {
+        const model: GridColumnVisibilityModel = {
+            adjudicatedIds: viewAdjudicated && tableMode !== 'alarmtable',
+            adjudicationGroup: tableMode === 'alarmtable',
+            secondaryInspection: tableMode === 'alarmtable',
+            // opt-in; configs predating the column carry no entry for it
+            vehicleId: false,
+        };
+        if (columnSettings)
+            for (const s of columnSettings) model[s.key] = s.visible;
+        setColumnVisibilityModel(model);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [columnSettingsKey, tableMode, viewAdjudicated]);
+
     const wantsAdjudicationColumns = useMemo(() =>
         (columnSettings ?? []).some((c) => c.visible && (c.key === 'adjudicationGroup' || c.key === 'secondaryInspection')),
         [columnSettings]);
+
+    // The Vehicle ID column is off by default, and the OCR reads that back it are
+    // only worth fetching when someone has actually turned it on. Configured
+    // pages carry columnSettings; the standard pages are uncontrolled, so the
+    // grid's own column panel reports toggles through columnVisibilityModel.
+    const wantsVehicleIdColumn = useMemo(() =>
+        columnVisibilityModel.vehicleId === true
+        || (columnSettings ?? []).some((c) => c.visible && c.key === 'vehicleId'),
+        [columnVisibilityModel, columnSettings]);
     // Adjudication statuses are queried by report time, but what the table needs
     // to know is whether the occupancies ON SCREEN have been adjudicated. An
     // occupancy can only be adjudicated after it happened, so a window that
@@ -177,7 +210,13 @@ export default function EventTable({
         [adjWindowStartIso, adjLaneIds]);
 
     const adjudicationMap: AdjudicationByOccupancy = useAdjudicationMap(
-        stableLaneMap, tableMode === "alarmtable" || wantsAdjudicationColumns, adjOptions);
+        stableLaneMap, tableMode === "alarmtable" || wantsAdjudicationColumns || wantsVehicleIdColumn, adjOptions);
+
+    // Same lanes and window as the adjudication seed: OCR result time trails the
+    // occupancy by seconds, so a window covering the visible rows covers their
+    // reads too.
+    const vehicleOcrMap: VehicleOcrByOccupancy = useVehicleOcrMap(
+        stableLaneMap, wantsVehicleIdColumn, adjOptions);
     const currentPageRef = useRef(0);
     const locale = navigator.language || 'en-US';
 
@@ -292,6 +331,35 @@ export default function EventTable({
             valueGetter: (_: any, row: EventTableData) => row.adjudicationGroup || 'Not Adjudicated'
         },
         {
+            field: 'vehicleId',
+            headerName: t('vehicleId'),
+            minWidth: 140,
+            flex: 1.1,
+            filterable: false,
+            sortable: false,
+            valueGetter: (_: any, row: EventTableData) => row.vehicleId || '',
+            renderCell: (params: GridRenderCellParams<EventTableData>) => {
+                const value = params.row.vehicleId;
+                if (!value) return null;
+                if (!params.row.vehicleIdFromOcr) return <span>{value}</span>;
+                // An unadjudicated camera read is a suggestion, not a record —
+                // and the ISO 6346 check digit is a weak discriminator, so it
+                // must never be mistaken for an operator-confirmed value.
+                return (
+                    <Tooltip title={t('ocrSuggestions')}>
+                        <Typography
+                            variant="body2"
+                            component="span"
+                            color="text.secondary"
+                            sx={{fontStyle: 'italic'}}
+                        >
+                            {`${value} (OCR)`}
+                        </Typography>
+                    </Tooltip>
+                );
+            }
+        },
+        {
             field: 'secondaryInspection',
             headerName: t('secondaryInspection'),
             minWidth: 140,
@@ -338,16 +406,6 @@ export default function EventTable({
         }
         return ordered;
     })();
-
-    const columnSettingsKey = columnSettings ? JSON.stringify(columnSettings) : null;
-    const [columnVisibilityModel, setColumnVisibilityModel] = useState<GridColumnVisibilityModel>({});
-    useEffect(() => {
-        if (!columnSettings) return;
-        const model: GridColumnVisibilityModel = {};
-        for (const s of columnSettings) model[s.key] = s.visible;
-        setColumnVisibilityModel(model);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [columnSettingsKey]);
 
     const handlePaginationChange = useCallback((model: { page: number; pageSize: number }) => {
         if (model.page === 0 && paginationModel.page !== 0) {
@@ -401,8 +459,18 @@ export default function EventTable({
             row.setSecondaryInspection("NONE");
             row.setAdjudicationGroup("Not Adjudicated");
         }
+
+        // What the operator recorded wins; fall back to the best camera read so
+        // an alarm nobody has worked yet still shows what came off the lane.
+        const adjudicatedVehicleId = adj?.vehicleId?.trim();
+        if (adjudicatedVehicleId) {
+            row.setVehicleId(adjudicatedVehicleId, false);
+        } else {
+            const ocr = occId ? vehicleOcrMap.get(occId) : undefined;
+            row.setVehicleId(ocr?.normalizedValue ?? "", Boolean(ocr));
+        }
         return row;
-    }, [adjudicationMap]);
+    }, [adjudicationMap, vehicleOcrMap]);
 
     const passesAlarmFilter = useCallback((row: EventTableData): boolean => {
         if (!alarmFilter.alarmTypes.has(row.status as AlarmType)) {
@@ -434,9 +502,12 @@ export default function EventTable({
             case 'eventlog':
             // shows all events
             default:
-                return wantsAdjudicationColumns ? laneScoped.map(enrichRowWithAdjudication) : laneScoped;
+                // the Vehicle ID column is filled in by the same enrichment pass
+                return wantsAdjudicationColumns || wantsVehicleIdColumn
+                    ? laneScoped.map(enrichRowWithAdjudication)
+                    : laneScoped;
         }
-    }, [tableMode, currentLane, enrichRowWithAdjudication, passesAlarmFilter, laneFilterSet, wantsAdjudicationColumns]);
+    }, [tableMode, currentLane, enrichRowWithAdjudication, passesAlarmFilter, laneFilterSet, wantsAdjudicationColumns, wantsVehicleIdColumn]);
 
     useEffect(() => {
         if (adjudicatedEventId && tableMode === 'alarmtable') {
@@ -628,7 +699,13 @@ export default function EventTable({
             newEvent.setRPMSystemId(laneEntry.lookupSystemIdFromDataStreamId(obs.properties["datastream@id"]));
             newEvent.setDataStreamId(obs.properties["datastream@id"]);
             newEvent.setFoiId(obs.properties["foi@id"]);
-            newEvent.setOccupancyObsId(obs.id);
+            // `obs.id` is undefined on node-level results — the consysapi
+            // Observation wraps everything under `.properties` — so this line
+            // used to overwrite the id the constructor was correctly given,
+            // leaving every historical row keyed by undefined. That silently
+            // broke both the adjudication lookup ("Not Adjudicated" on rows
+            // that were adjudicated) and the OCR lookup behind Vehicle ID.
+            newEvent.setOccupancyObsId(obs.id ?? obs.properties?.id);
         }
 
         return newEvent;
@@ -720,12 +797,25 @@ export default function EventTable({
     };
 
     const getColumnList = () => {
-        if (columnSettings) return columnSettings.map((c) => c.key as string);
-
         const excludeFields: string[] = [];
         if (!viewAdjudicated) excludeFields.push('adjudicatedIds');
         if (tableMode !== 'alarmtable') {
             excludeFields.push('adjudicationGroup', 'secondaryInspection');
+        }
+
+        if (columnSettings) {
+            // A saved widget config only knows the columns that existed when it
+            // was written. Union it with the grid's current columns, or every
+            // column added later is unreachable from the panel — present in the
+            // grid but impossible to switch on without recreating the widget.
+            const saved = columnSettings.map((c) => c.key as string);
+            const savedKeys = new Set(saved);
+            const added = columns
+                .filter((column) => column.headerName
+                    && !savedKeys.has(column.field)
+                    && !excludeFields.includes(column.field))
+                .map((column) => column.field);
+            return [...saved, ...added];
         }
 
         return columns
@@ -1013,13 +1103,13 @@ export default function EventTable({
                 onPaginationModelChange={handlePaginationChange}
                 rowCount={rowCount}
                 columns={orderedColumns}
-                {...(columnSettings ? {
-                    columnVisibilityModel,
-                    onColumnVisibilityModelChange: (model: GridColumnVisibilityModel) => {
-                        setColumnVisibilityModel(model);
-                        onColumnVisibilityChange?.(model);
-                    },
-                } : {})}
+                columnVisibilityModel={columnVisibilityModel}
+                // Tracked even when the grid is uncontrolled: the optional
+                // Vehicle ID column gates its OCR fetch on being switched on.
+                onColumnVisibilityModelChange={(model: GridColumnVisibilityModel) => {
+                    setColumnVisibilityModel(model);
+                    if (columnSettings) onColumnVisibilityChange?.(model);
+                }}
                 onRowClick={handleRowSelection}
                 onRowDoubleClick={handleRowDoubleClick}
                 rowSelectionModel={selectionModel}
@@ -1047,6 +1137,8 @@ export default function EventTable({
                             adjudicatedIds: viewAdjudicated && tableMode !== 'alarmtable',
                             adjudicationGroup: tableMode === 'alarmtable',
                             secondaryInspection: tableMode === 'alarmtable',
+                            // Optional: off until turned on from the columns panel.
+                            vehicleId: false,
                         },
                     },
                 }}

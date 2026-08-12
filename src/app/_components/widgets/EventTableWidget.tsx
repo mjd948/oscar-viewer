@@ -46,6 +46,14 @@ export function ConfigurableEventTable({page, widget, adjudicationMode}: WidgetP
             : DEFAULT_EVENT_TABLE_COLUMNS.map((c) => ({...c}));
         const next = base.map((col) =>
             model[col.key] !== undefined ? {...col, visible: !!model[col.key]} : col);
+        // base only knows the columns that existed when this widget was saved,
+        // so a toggle of any newer column would be silently dropped here and
+        // revert on the next load. Carry the unknown keys through.
+        const known = new Set(base.map((col) => col.key as string));
+        for (const key of Object.keys(model)) {
+            if (!known.has(key) && DEFAULT_EVENT_TABLE_COLUMNS.some((c) => c.key === key))
+                next.push({key: key as EventTableColumnSetting['key'], visible: !!model[key]});
+        }
         dispatch(updateWidgetConfig({
             pageId: page.id,
             widgetId: widget.id,

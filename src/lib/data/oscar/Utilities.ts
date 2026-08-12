@@ -176,7 +176,12 @@ export function isVehicleOcrDataStream(datastream: typeof DataStream): boolean {
     if (!hasDefinitionProperties(datastream))
         return false;
 
-    return datastream.properties.observedProperties[0].definition.includes(OCR_DEF);
+    // Unlike the single-property datastreams above, vehicleOcr publishes ten
+    // observed properties and OCRValue is the third of them — checking only
+    // [0] silently never matches, which is how the OCR fetch found no streams
+    // and issued no requests at all.
+    return datastream.properties.observedProperties.some((prop: any) =>
+        prop?.definition?.includes(OCR_DEF));
 }
 
 export function isHLSVideoControlStream(controlStream: typeof ControlStream): boolean {

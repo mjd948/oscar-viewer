@@ -28,6 +28,9 @@ export class EventTableData implements IEventTableData {
     videoPaths: string[];
     adjudicatedIds: string[];
     adjudicationGroup: string;
+    /** Adjudicated vehicle ID, or the best camera OCR read when not yet adjudicated. */
+    vehicleId?: string;
+    vehicleIdFromOcr?: boolean;
     parentNode: string;
     isRS350: boolean;
 
@@ -117,6 +120,15 @@ export class EventTableData implements IEventTableData {
 
     setAdjudicationGroup(group: string) {
         this.adjudicationGroup = group;
+    }
+
+    /**
+     * `fromOcr` marks a camera read standing in for an operator-entered value,
+     * so the table can present it as a suggestion rather than a recorded fact.
+     */
+    setVehicleId(vehicleId: string, fromOcr: boolean = false) {
+        this.vehicleId = vehicleId;
+        this.vehicleIdFromOcr = fromOcr;
     }
 }
 

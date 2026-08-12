@@ -68,7 +68,8 @@ export type EventTableColumnKey =
     | 'status'
     | 'adjudicatedIds'
     | 'adjudicationGroup'
-    | 'secondaryInspection';
+    | 'secondaryInspection'
+    | 'vehicleId';
 
 export interface EventTableColumnSetting {
     key: EventTableColumnKey;
@@ -308,6 +309,7 @@ export const DEFAULT_EVENT_TABLE_COLUMNS: EventTableColumnSetting[] = [
     {key: 'adjudicatedIds', visible: true},
     {key: 'adjudicationGroup', visible: true},
     {key: 'secondaryInspection', visible: false},
+    {key: 'vehicleId', visible: false},
 ];
 
 /** Fresh default config for a newly added widget of the given type. */
