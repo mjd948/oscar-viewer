@@ -65,6 +65,10 @@ import * as React from "react";
 /** Adjudication window starts are floored to this so paging doesn't refetch for a few extra seconds of history. */
 const ADJ_WINDOW_QUANTUM_MS = 60 * 60 * 1000;
 
+// Backoff for recovering a live row's occupancy observation id. Spans ~10s,
+// comfortably inside the time an OCR result takes to come back anyway.
+const OBS_ID_BACKFILL_DELAYS_MS = [400, 1200, 3000, 6000];
+
 interface TableProps {
     tableMode: "eventlog" | "alarmtable" | "lanelog";
     viewSecondary?: boolean;
@@ -218,6 +222,11 @@ export default function EventTable({
     const vehicleOcrMap: VehicleOcrByOccupancy = useVehicleOcrMap(
         stableLaneMap, wantsVehicleIdColumn, adjOptions);
     const currentPageRef = useRef(0);
+    // Rows whose observation id has already been chased, so an occRT redelivery
+    // does not start a second round of queries for the same alarm.
+    const backfilledRowsRef = useRef<Set<number>>(new Set());
+    const mountedRef = useRef(true);
+    useEffect(() => () => { mountedRef.current = false; }, []);
     const locale = navigator.language || 'en-US';
 
     const columns: GridColDef<EventTableData>[] = [
@@ -452,25 +461,35 @@ export default function EventTable({
     const enrichRowWithAdjudication = useCallback((row: EventTableData): EventTableData => {
         const occId = row.occupancyObsId;
         const adj = occId ? adjudicationMap.get(occId) : undefined;
-        if (adj) {
-            row.setSecondaryInspection(adj.secondaryInspectionStatus || "NONE");
-            row.setAdjudicationGroup(adj.adjudicationCode?.group || "Not Adjudicated");
-        } else {
-            row.setSecondaryInspection("NONE");
-            row.setAdjudicationGroup("Not Adjudicated");
-        }
+        const secondaryInspection = adj?.secondaryInspectionStatus || "NONE";
+        const adjudicationGroup = adj?.adjudicationCode?.group || "Not Adjudicated";
 
         // What the operator recorded wins; fall back to the best camera read so
         // an alarm nobody has worked yet still shows what came off the lane.
         const adjudicatedVehicleId = adj?.vehicleId?.trim();
-        if (adjudicatedVehicleId) {
-            row.setVehicleId(adjudicatedVehicleId, false);
-        } else {
-            const ocr = occId ? vehicleOcrMap.get(occId) : undefined;
-            row.setVehicleId(ocr?.normalizedValue ?? "", Boolean(ocr));
-        }
-        return row;
+        const ocr = adjudicatedVehicleId ? undefined : (occId ? vehicleOcrMap.get(occId) : undefined);
+        const vehicleId = adjudicatedVehicleId || (ocr?.normalizedValue ?? "");
+        const vehicleIdFromOcr = !adjudicatedVehicleId && Boolean(ocr);
+
+        // Returning the same reference when nothing changed is what keeps a
+        // stream message from invalidating every row in the grid.
+        if (row.secondaryInspection === secondaryInspection
+                && row.adjudicationGroup === adjudicationGroup
+                && row.vehicleId === vehicleId
+                && Boolean(row.vehicleIdFromOcr) === vehicleIdFromOcr)
+            return row;
+
+        const next = row.clone();
+        next.setSecondaryInspection(secondaryInspection);
+        next.setAdjudicationGroup(adjudicationGroup);
+        next.setVehicleId(vehicleId, vehicleIdFromOcr);
+        return next;
     }, [adjudicationMap, vehicleOcrMap]);
+
+    // The back-fill runs long after the row was created, so it has to enrich
+    // with whatever the maps hold by then, not with what they held at capture.
+    const enrichRowRef = useRef(enrichRowWithAdjudication);
+    enrichRowRef.current = enrichRowWithAdjudication;
 
     const passesAlarmFilter = useCallback((row: EventTableData): boolean => {
         if (!alarmFilter.alarmTypes.has(row.status as AlarmType)) {
@@ -722,14 +741,82 @@ export default function EventTable({
             fetchPage(paginationModel.page);
     }, [totalPages, paginationModel.page, filterModel, alarmFilter]);
 
+    // Late-arriving values — an adjudication, an OCR read that took a few
+    // seconds of video processing — have to reach rows that are already on
+    // screen. The event log needs this too whenever it is showing one of those
+    // columns; only the lane log, which never enriches, stays out.
     useEffect(() => {
-        if (tableMode !== 'alarmtable') return;
-        setFilteredTableData(prev => prev.map(row => enrichRowWithAdjudication(row)).filter(passesAlarmFilter));
-    }, [adjudicationMap, tableMode, enrichRowWithAdjudication, passesAlarmFilter]);
+        if (tableMode === 'lanelog') return;
+        if (tableMode !== 'alarmtable' && !wantsVehicleIdColumn) return;
+        setFilteredTableData(prev => {
+            const enriched = prev.map(row => enrichRowWithAdjudication(row));
+            const next = tableMode === 'alarmtable' ? enriched.filter(passesAlarmFilter) : enriched;
+            const unchanged = next.length === prev.length && next.every((row, i) => row === prev[i]);
+            return unchanged ? prev : next;
+        });
+    }, [adjudicationMap, vehicleOcrMap, tableMode, wantsVehicleIdColumn,
+        enrichRowWithAdjudication, passesAlarmFilter]);
 
     useEffect(() => {
         currentPageRef.current = paginationModel.page;
     }, [paginationModel.page]);
+
+    /**
+     * A realtime occupancy message carries the occupancy's result but not its
+     * observation id, so a live row starts with `occupancyObsId = null` — and
+     * both the adjudication map and the OCR map behind the Vehicle ID column are
+     * keyed by exactly that id. Until this back-fill landed, a freshly alarmed
+     * row stayed blank until the operator refreshed the page and the row was
+     * rebuilt from the API.
+     *
+     * The observation is written to the store around the same moment the message
+     * goes out, so the first read can legitimately miss; retry across the window
+     * in which OCR results land anyway.
+     */
+    const backfillOccupancyObsId = useCallback(async (row: EventTableData, entry: LaneMapEntry) => {
+        if (row.occupancyObsId || !row.startTime) return;
+        if (backfilledRowsRef.current.has(row.id)) return;
+        backfilledRowsRef.current.add(row.id);
+
+        const occStream = entry.datastreams.find(isOccupancyDataStream);
+        if (!occStream) return;
+
+        // Match on parsed timestamps rather than string equality: this row's
+        // startTime came off MQTT and the stored one came back through the API,
+        // and the two need not be formatted identically.
+        const startMs = Date.parse(row.startTime);
+        const endMs = Date.parse(row.endTime ?? row.startTime);
+        if (Number.isNaN(startMs)) return;
+        const from = new Date(startMs - 2000).toISOString();
+        const to = new Date((Number.isNaN(endMs) ? startMs : endMs) + 60000).toISOString();
+
+        for (const delayMs of OBS_ID_BACKFILL_DELAYS_MS) {
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            if (!mountedRef.current) return;
+            try {
+                const page = await occStream.searchObservations(
+                    new ConSysObservationFilter({resultTime: `${from}/${to}`}), 25);
+                const items = await page.nextPage();
+                const match = (items ?? []).find((obs: any) => {
+                    const result = obs.result ?? obs.properties?.result;
+                    return result?.startTime != null
+                        && Math.abs(Date.parse(result.startTime) - startMs) < 1500;
+                });
+                const obsId = match?.id ?? match?.properties?.id;
+                if (!obsId) continue;
+
+                setFilteredTableData(prev => prev.map(existing => {
+                    if (existing.id !== row.id || existing.occupancyObsId) return existing;
+                    const withId = existing.clone();
+                    withId.setOccupancyObsId(obsId);
+                    return enrichRowRef.current(withId);
+                }));
+                return;
+            } catch (err) {
+                console.warn("Failed to back-fill occupancy observation id", err);
+            }
+        }
+    }, []);
 
     // Live occupancy rows via the shared LaneStreamRegistry: one dispatcher per
     // lane, released on unmount (the old direct subscribe/connect stacked
@@ -765,6 +852,8 @@ export default function EventTable({
                 if (exists) return prev;
                 return [event, ...prev].slice(0, pageSize);
             });
+
+            backfillOccupancyObsId(event, entry);
         } catch (err) {
             console.error("Error creating event from observation:", err);
         }

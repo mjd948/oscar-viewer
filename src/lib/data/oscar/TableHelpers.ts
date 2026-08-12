@@ -130,6 +130,16 @@ export class EventTableData implements IEventTableData {
         this.vehicleId = vehicleId;
         this.vehicleIdFromOcr = fromOcr;
     }
+
+    /**
+     * Shallow copy that keeps the prototype (and so the methods above). MUI
+     * DataGrid memoizes each row on the identity of its row object, so a value
+     * that arrives after the row is on screen — an OCR read, an adjudication —
+     * only repaints if the row is replaced rather than mutated.
+     */
+    clone(): EventTableData {
+        return Object.assign(Object.create(EventTableData.prototype), this);
+    }
 }
 
 export class EventTableDataCollection {
