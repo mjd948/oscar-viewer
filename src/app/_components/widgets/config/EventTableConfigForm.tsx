@@ -27,46 +27,18 @@ import {DateTimePicker, LocalizationProvider} from "@mui/x-date-pickers";
 import {AdapterDayjs} from "@mui/x-date-pickers/AdapterDayjs";
 import dayjs from "dayjs";
 import LaneSelectionField from "./LaneSelectionField";
-import {
-    DEFAULT_EVENT_TABLE_COLUMNS,
-    EventTableColumnSetting,
-    EventTableWidgetConfig,
-} from "@/lib/layout/PageConfigTypes";
+import {EventTableColumnSetting, EventTableWidgetConfig} from "@/lib/layout/PageConfigTypes";
+import {COLUMN_LABEL_KEYS, resolveEventTableColumns} from "@/lib/layout/EventTableColumns";
 import {WidgetConfigFormProps} from "@/app/_components/layout/WidgetTypes";
 import {useLanguage} from "@/app/contexts/LanguageContext";
 
 const STATUS_OPTIONS = ['Gamma', 'Neutron', 'Gamma & Neutron', 'None'];
 
-/** i18n keys for column labels, matching the EventTable headers. */
-const COLUMN_LABEL_KEYS: Record<string, string> = {
-    laneId: 'laneId',
-    occupancyCount: 'occupancyId',
-    startTime: 'startTime',
-    endTime: 'endTime',
-    maxGamma: 'maxGamma',
-    maxNeutron: 'maxNeutron',
-    status: 'status',
-    adjudicatedIds: 'adjudicated',
-    adjudicationGroup: 'adjudicationStatus',
-    secondaryInspection: 'secondaryInspection',
-    vehicleId: 'vehicleId',
-};
-
 export default function EventTableConfigForm({draft, onChange}: WidgetConfigFormProps) {
     const config = draft as EventTableWidgetConfig;
     const {t} = useLanguage();
 
-    const savedColumns: EventTableColumnSetting[] = config.columns?.length
-        ? config.columns
-        : DEFAULT_EVENT_TABLE_COLUMNS.map((c) => ({...c}));
-    // Configs written before a column existed have no entry for it; append the
-    // missing ones at their default visibility so newly added columns are
-    // configurable on existing widgets rather than only on fresh ones.
-    const savedKeys = new Set(savedColumns.map((c) => c.key));
-    const columns: EventTableColumnSetting[] = [
-        ...savedColumns,
-        ...DEFAULT_EVENT_TABLE_COLUMNS.filter((c) => !savedKeys.has(c.key)).map((c) => ({...c})),
-    ];
+    const columns = resolveEventTableColumns(config.columns);
     const filters = config.filters ?? {lanes: {mode: 'all' as const}};
 
     const setColumns = (next: EventTableColumnSetting[]) => onChange({...config, columns: next});

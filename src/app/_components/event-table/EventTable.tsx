@@ -56,6 +56,7 @@ import {
 import {useVehicleOcrMap, VehicleOcrByOccupancy} from "@/app/_components/event-table/useVehicleOcrMap";
 import { AdjudicationCodes } from "@/lib/data/oscar/adjudication/models/AdjudicationConstants";
 import { EventTableColumnSetting, LaneSelection } from "@/lib/layout/PageConfigTypes";
+import { applyFieldOrder, resolveEventTableColumns } from "@/lib/layout/EventTableColumns";
 import { resolveLaneSelection } from "@/lib/data/oscar/streams/LaneStreamRegistry";
 import { useLaneStreams } from "@/lib/data/oscar/streams/useLaneStreams";
 import { GridColumnVisibilityModel } from "@mui/x-data-grid";
@@ -893,18 +894,14 @@ export default function EventTable({
         }
 
         if (columnSettings) {
-            // A saved widget config only knows the columns that existed when it
-            // was written. Union it with the grid's current columns, or every
-            // column added later is unreachable from the panel — present in the
-            // grid but impossible to switch on without recreating the widget.
-            const saved = columnSettings.map((c) => c.key as string);
-            const savedKeys = new Set(saved);
-            const added = columns
-                .filter((column) => column.headerName
-                    && !savedKeys.has(column.field)
-                    && !excludeFields.includes(column.field))
-                .map((column) => column.field);
-            return [...saved, ...added];
+            const savedKeys = new Set(columnSettings.map((c) => c.key as string));
+            // excludeFields has never applied to keys the config already
+            // carries — only to columns it predates — and narrowing that now
+            // would hide already-visible columns from the panel on existing
+            // widgets.
+            return resolveEventTableColumns(columnSettings)
+                .filter((c) => savedKeys.has(c.key) || !excludeFields.includes(c.key))
+                .map((c) => c.key as string);
         }
 
         return columns

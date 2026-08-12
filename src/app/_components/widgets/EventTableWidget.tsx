@@ -13,11 +13,8 @@ import EventTable from "@/app/_components/event-table/EventTable";
 import AdjudicationDialog from "./AdjudicationDialog";
 import {RootState} from "@/lib/state/Store";
 import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
-import {
-    DEFAULT_EVENT_TABLE_COLUMNS,
-    EventTableColumnSetting,
-    EventTableWidgetConfig,
-} from "@/lib/layout/PageConfigTypes";
+import {EventTableWidgetConfig} from "@/lib/layout/PageConfigTypes";
+import {resolveEventTableColumns} from "@/lib/layout/EventTableColumns";
 import {updateWidgetConfig} from "@/lib/state/PageLayoutSlice";
 import {useAppDispatch} from "@/lib/state/Hooks";
 import {WidgetProps} from "@/app/_components/layout/WidgetTypes";
@@ -41,19 +38,8 @@ export function ConfigurableEventTable({page, widget, adjudicationMode}: WidgetP
     // Toggles made in the grid's own column panel must survive reload: fold
     // them back into the widget's persisted config.
     const handleColumnVisibilityChange = (model: GridColumnVisibilityModel) => {
-        const base: EventTableColumnSetting[] = config.columns?.length
-            ? config.columns
-            : DEFAULT_EVENT_TABLE_COLUMNS.map((c) => ({...c}));
-        const next = base.map((col) =>
+        const next = resolveEventTableColumns(config.columns).map((col) =>
             model[col.key] !== undefined ? {...col, visible: !!model[col.key]} : col);
-        // base only knows the columns that existed when this widget was saved,
-        // so a toggle of any newer column would be silently dropped here and
-        // revert on the next load. Carry the unknown keys through.
-        const known = new Set(base.map((col) => col.key as string));
-        for (const key of Object.keys(model)) {
-            if (!known.has(key) && DEFAULT_EVENT_TABLE_COLUMNS.some((c) => c.key === key))
-                next.push({key: key as EventTableColumnSetting['key'], visible: !!model[key]});
-        }
         dispatch(updateWidgetConfig({
             pageId: page.id,
             widgetId: widget.id,
