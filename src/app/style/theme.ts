@@ -88,9 +88,35 @@ export const getTheme = (mode: PaletteMode) => {
         // still lets users switch back.
         defaultProps: {
           density: "compact",
+          // Headers wrap to two lines (see columnHeaderTitle below), which the
+          // 39px compact default cannot show. The grid derives the real height
+          // as floor(columnHeaderHeight * densityFactor) and feeds it to the
+          // --DataGrid-headerHeight variable the scroller offsets from, so this
+          // has to come from the prop — growing the cell in CSS alone would
+          // leave the rows overlapping the header.
+          columnHeaderHeight: 68,
         },
         styleOverrides: {
           root: {},
+          // Long labels ("Max Neutron (cps)", "Adjudication Status") otherwise
+          // force a column to stay wide enough for one unbroken line, which is
+          // what pinned every event-table column at its minWidth. Clamp at two
+          // lines so a pathological header still cannot outgrow the fixed
+          // header height.
+          columnHeaderTitle: {
+            whiteSpace: "normal",
+            lineHeight: 1.25,
+            // A header whose longest WORD exceeds the column still has to
+            // degrade legibly — minWidths are set to avoid this, but a user
+            // dragging a column very narrow would otherwise get a hard clip
+            // with no ellipsis (the -webkit-box clamp only ellipsizes when it
+            // drops a whole line).
+            overflowWrap: "break-word",
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: 2,
+            overflow: "hidden",
+          },
           // Default is a fixed 52px for what is one line of pagination text.
           // The inner TablePagination toolbar carries its own 52px, so shrinking
           // the container alone leaves the height unchanged.
