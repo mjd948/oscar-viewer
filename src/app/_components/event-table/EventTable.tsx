@@ -20,6 +20,7 @@ import {
     GridCellParams,
     gridClasses,
     GridColDef,
+    GridColumnResizeParams,
     GridRenderCellParams,
     GridRowParams,
     GridRowSelectionModel
@@ -173,6 +174,25 @@ export default function EventTable({
         setColumnVisibilityModel(model);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [columnSettingsKey, tableMode, viewAdjudicated]);
+
+    // Widths the user has dragged. The grid does record a resize in its own
+    // column state, but it recomputes that state from `props.columns` whenever
+    // their identity changes — which here is every render — and
+    // hydrateColumnsWidth gives any column with `flex > 0` its flex share and
+    // ignores the stored width outright. So the width has to live out here and
+    // be baked back into the colDef, or the resize is discarded the moment the
+    // next live row arrives.
+    const [localColumnWidths, setLocalColumnWidths] = useState<Record<string, number>>({});
+    const columnWidths = useMemo<Record<string, number>>(() => {
+        // One source of truth: widget-hosted tables keep widths in the config
+        // that already carries order and visibility, standalone ones keep them
+        // for the session.
+        if (!columnSettings) return localColumnWidths;
+        const widths: Record<string, number> = {};
+        for (const s of columnSettings) if (s.width) widths[s.key] = s.width;
+        return widths;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [columnSettingsKey, localColumnWidths, !columnSettings]);
 
     const wantsAdjudicationColumns = useMemo(() =>
         (columnSettings ?? []).some((c) => c.visible && (c.key === 'adjudicationGroup' || c.key === 'secondaryInspection')),
@@ -410,10 +430,19 @@ export default function EventTable({
         },
     ];
 
+    // A stored width only takes effect with flex cleared: hydrateColumnsWidth
+    // hands any column with flex > 0 its share of the free space and never
+    // looks at width. minWidth still applies, which is what stops a drag from
+    // shrinking a column past the point of being readable.
+    const withStoredWidth = (col: GridColDef<EventTableData>): GridColDef<EventTableData> => {
+        const width = columnWidths[col.field];
+        return width ? {...col, width, flex: undefined} : col;
+    };
+
     // Widget-configured column order: settings order first, remaining base
     // columns (e.g. the actions column) keep their relative order at the end.
     const orderedColumns: GridColDef<EventTableData>[] = (() => {
-        if (!columnSettings || columnSettings.length === 0) return columns;
+        if (!columnSettings || columnSettings.length === 0) return columns.map(withStoredWidth);
         const byField = new Map(columns.map((c) => [c.field, c]));
         const ordered: GridColDef<EventTableData>[] = [];
         for (const setting of columnSettings) {
@@ -426,7 +455,7 @@ export default function EventTable({
         for (const col of columns) {
             if (byField.has(col.field)) ordered.push(col);
         }
-        return ordered;
+        return ordered.map(withStoredWidth);
     })();
 
     const handlePaginationChange = useCallback((model: { page: number; pageSize: number }) => {
@@ -951,6 +980,19 @@ export default function EventTable({
         emitColumnSettings((current) => applyFieldOrder(current, fields));
     };
 
+    // Fires once on drag release (the drag itself moves the DOM directly and
+    // never reaches React), so this writes at most one config entry per resize.
+    const handleColumnWidthChange = (params: GridColumnResizeParams) => {
+        const field = params.colDef.field;
+        const width = Math.round(params.width);
+        if (!width) return;
+        if (columnSettings)
+            emitColumnSettings((current) =>
+                current.map((c) => (c.key === field ? {...c, width} : c)));
+        else
+            setLocalColumnWidths((prev) => ({...prev, [field]: width}));
+    };
+
     const handleAlarmFilterChange = useCallback((next: AlarmFilterState) => {
         setAlarmFilter(next);
         setPaginationModel(prev => ({ ...prev, page: 0 }));
@@ -1233,6 +1275,7 @@ export default function EventTable({
                 columns={orderedColumns}
                 columnVisibilityModel={columnVisibilityModel}
                 onColumnVisibilityModelChange={handleColumnVisibilityModelChange}
+                onColumnWidthChange={handleColumnWidthChange}
                 onRowClick={handleRowSelection}
                 onRowDoubleClick={handleRowDoubleClick}
                 rowSelectionModel={selectionModel}

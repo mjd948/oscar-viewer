@@ -74,6 +74,11 @@ export type EventTableColumnKey =
 export interface EventTableColumnSetting {
     key: EventTableColumnKey;
     visible: boolean;
+    /**
+     * Width in px once the user has dragged this column. Absent means the
+     * column still flexes to share the available width, which is the default.
+     */
+    width?: number;
 }
 
 export interface EventTableFilters {
