@@ -25,7 +25,11 @@ const NODE_PORT = Number(Cypress.env('nodePort') || 8090);
 
 const LOCAL_NODE = [{
     name: 'cypress-local',
-    address: 'localhost',
+    // Derived from baseUrl, never hardcoded: pointing the browser at
+    // 127.0.0.1 while the node address says localhost is cross-origin, the
+    // MQTT-over-WS upgrade then carries no basic auth, and every lane
+    // correctly reports Comm Failure — which reads like a product bug.
+    address: new URL(Cypress.config('baseUrl') as string).hostname,
     port: NODE_PORT,
     oshPathRoot: '/sensorhub',
     csAPIEndpoint: '/api',

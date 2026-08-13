@@ -18,17 +18,20 @@
 
 import {
     ADMIN_URL, ONLINE_ICONS, PATROL, WALKER_NORMAL, WALKER_OFFLINE,
-    ensureModuleState, laneChip, moduleAction, selectModule, visitDashboard,
+    ensureModuleState, laneChip, moduleAction, selectModule, skipUnlessDeviceLive, visitDashboard,
 } from './commFailureShared';
 
 // retries: an app visit can intermittently land the stale-document artifact
 // (commFailureShared.ts) — a retried test re-navigates from a fresh context.
 describe('Comm failure detection when a module is stopped (phase A: live watchdog)', {retries: 2}, () => {
 
-    it('ensures the Patrol module is started (self-heal from prior runs)', () => {
+    // Self-heal module state from prior runs, then require a live detector
+    // behind it (skips the suite otherwise — see the helper). In a hook, not a
+    // test: this.skip() only skips the whole suite from a hook.
+    before(function () {
         ensureModuleState(PATROL, 'STARTED');
-        // Let the driver re-establish its detector feed before the baseline.
-        cy.wait(3000);
+        cy.wait(3000); // let the driver re-establish its detector feed
+        skipUnlessDeviceLive(this);
     });
 
     it('baseline: Patrol chip is online and its walker is on the map', () => {

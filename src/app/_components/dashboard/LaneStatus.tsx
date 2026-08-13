@@ -32,7 +32,10 @@ interface RenderedLaneStatus {
 
 // Mobile lanes (RS-350/D5) have no alarmState streams: their live alarms ride
 // rs350AlarmRT/radStatusRT, with the (delayed) occupancy record as a backstop.
-const STATUS_STREAMS: LaneStreamName[] = ['connectionRT', 'gammaRT', 'neutronRT', 'tamperRT', 'occRT', 'rs350AlarmRT', 'radStatusRT'];
+// locRT carries no status of its own — it is subscribed as the RS-350's only
+// continuous device stream, so silence there is what proves a backpack has
+// stopped reporting (its alarm/occupancy streams are event-driven).
+const STATUS_STREAMS: LaneStreamName[] = ['connectionRT', 'gammaRT', 'neutronRT', 'tamperRT', 'occRT', 'rs350AlarmRT', 'radStatusRT', 'locRT'];
 
 export default function LaneStatus(props: { lanes?: LaneSelection, hideTitle?: boolean }) {
     const lanes: LaneSelection = props.lanes ?? {mode: 'all'};
@@ -64,7 +67,27 @@ export default function LaneStatus(props: { lanes?: LaneSelection, hideTitle?: b
             case 'connectionRT': {
                 const state = message.values[0].data.isConnected;
                 if (state == undefined) return;
-                dispatch(applyStatusUpdate({laneName, source: 'connection', newState: state ? 'Online' : 'Offline'}));
+                if (!state) {
+                    dispatch(applyStatusUpdate({laneName, source: 'connection', newState: 'Offline'}));
+                    break;
+                }
+                // isConnected:true is not evidence of device life — the RS-350
+                // module publishes it at 1 Hz even with the detector's socket
+                // dead (see LIVENESS_STREAMS). Honor it only while the lane's
+                // device data is still flowing, so it can't undo the comms
+                // watchdog a second after it fires; recovery rides the data
+                // streams below. Deliberately no pulse: the beating heart must
+                // mean real data, not a module talking to itself.
+                if (!LaneStreamRegistry.isLaneStale(laneName)) {
+                    dispatch(applyStatusUpdate({laneName, source: 'connection', newState: 'Online'}));
+                }
+                break;
+            }
+            case 'locRT': {
+                // Position fixes are the RS-350's continuous device stream:
+                // their arrival is the liveness signal (payload is the map's
+                // business), and they drive recovery after a comms failure.
+                dispatch(applyStatusUpdate({laneName, source: 'connection', newState: 'Online'}));
                 bumpPulse(laneName);
                 break;
             }

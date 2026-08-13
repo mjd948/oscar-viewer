@@ -101,6 +101,76 @@ export function moduleAction(name: string, action: 'Start' | 'Stop', expectState
     cy.get('.v-Notification-error, .v-Notification.error').should('not.exist');
 }
 
+/** Age tolerance for "is data actually flowing": staleness threshold + slack. */
+export const DEVICE_LIVE_MAX_MS = 20_000;
+
+export function apiGet(path: string) {
+    return cy.request({
+        url: `/sensorhub/api${path}`,
+        auth: {user: 'admin', pass: 'oscar'},
+    }).its('body');
+}
+
+/**
+ * Ages of the Patrol lane's continuous DEVICE stream (location) and of the
+ * module's own connectionStatus heartbeat, plus that heartbeat's value. The
+ * two diverge whenever the module is running but the detector is not — the
+ * case CommFailureSilentDevice covers.
+ */
+export function patrolDeviceAges(): Cypress.Chainable<any> {
+    const ids: Record<string, string> = {};
+    return apiGet('/systems?limit=100')
+        .then((body: any) => {
+            const sys = body.items.find((s: any) =>
+                String(s.properties?.uid ?? s.uid ?? '').toUpperCase().includes('PATROL1'));
+            expect(sys, 'Patrol 1 lane system').to.exist;
+            return apiGet(`/systems/${sys.id}/datastreams?limit=50`);
+        })
+        .then((body: any) => {
+            for (const ds of body.items) {
+                const name = String(ds.properties?.name ?? ds.name ?? '');
+                if (name === 'location' || name === 'connectionStatus') ids[name] = ds.id;
+            }
+            return latestObs(ids.location);
+        })
+        .then((locObs: any) => latestObs(ids.connectionStatus).then((connObs: any) => ({
+            locationMs: locObs.ageMs,
+            connectionMs: connObs.ageMs,
+            connectionResult: connObs.result,
+        })));
+}
+
+/** Age in ms of a datastream's newest observation (Infinity when it has none). */
+function latestObs(dsId: string | undefined): Cypress.Chainable<any> {
+    if (!dsId) return cy.wrap({ageMs: Infinity, result: null});
+    return apiGet(`/datastreams/${dsId}/observations?resultTime=latest&f=application/json`)
+        .then((body: any) => {
+            const obs = body?.items?.[0];
+            if (!obs) return {ageMs: Infinity, result: null};
+            const props = obs.properties ?? obs;
+            const t = Date.parse(props.phenomenonTime ?? props.resultTime);
+            return {ageMs: Number.isFinite(t) ? Date.now() - t : Infinity, result: obs.result ?? props.result};
+        });
+}
+
+/**
+ * Skip the whole suite when the detector behind Patrol 1 is silent (its
+ * simulator is stopped). The module stop/start flows can only be observed on
+ * a lane that is otherwise live, and a suite that goes red for an
+ * environmental reason is exactly the kind of misleading signal this feature
+ * exists to remove. CommFailureSilentDevice covers the silent-device case and
+ * needs no simulator.
+ */
+export function skipUnlessDeviceLive(ctx: Mocha.Context) {
+    patrolDeviceAges().then((ages: any) => {
+        if (ages.locationMs > DEVICE_LIVE_MAX_MS) {
+            cy.log(`SKIPPED: ${PATROL} device data is ${Math.round(ages.locationMs / 1000)}s stale ` +
+                `— start the detector simulator to run this spec.`);
+            ctx.skip();
+        }
+    });
+}
+
 /** Idempotently drive the module to STARTED/STOPPED via the admin UI. */
 export function ensureModuleState(name: string, want: 'STARTED' | 'STOPPED') {
     cy.visit(ADMIN_URL);

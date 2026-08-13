@@ -17,12 +17,21 @@
 
 import {
     PATROL, WALKER_NORMAL, WALKER_OFFLINE,
-    ensureModuleState, laneChip, visitDashboard,
+    ensureModuleState, laneChip, skipUnlessDeviceLive, visitDashboard,
 } from './commFailureShared';
 
 // retries: an app visit can intermittently land the stale-document artifact
 // (commFailureShared.ts) — a retried test re-navigates from a fresh context.
 describe('Comm failure detection when a module is stopped (phase B: reload + recovery)', {retries: 2}, () => {
+
+    // The recovery half can only be observed with a live detector behind the
+    // module, so start it and check before the tests stop it again. In a hook,
+    // not a test: this.skip() only skips the whole suite from a hook.
+    before(function () {
+        ensureModuleState(PATROL, 'STARTED');
+        cy.wait(3000);
+        skipUnlessDeviceLive(this);
+    });
 
     it('ensures the Patrol module is stopped and its silence is past the threshold', () => {
         ensureModuleState(PATROL, 'STOPPED');

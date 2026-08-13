@@ -58,15 +58,17 @@ async function reconcileOneLane(
     laneName: string,
     dispatch: ReturnType<typeof useAppDispatch>,
 ) {
-    // radStatusRT is fetched purely as a liveness probe: the Kromek D5 has no
-    // connectionStatus output, so its 1 Hz radiometric status is the only
-    // reconcilable evidence of life (mirrors the live handlers in LaneStatus).
-    const [gamma, neutron, tamper, connection, radStatus] = await Promise.all([
+    // radStatusRT and locRT are fetched purely as liveness probes: they are
+    // the continuous device streams for the Kromek D5 and the RS-350 backpack
+    // respectively (neither has usable gamma/neutron/tamper outputs), so they
+    // are the only reconcilable evidence of life for a mobile lane.
+    const [gamma, neutron, tamper, connection, radStatus, loc] = await Promise.all([
         fetchLatestResult(laneMap, laneName, 'gammaRT').catch((): any => null),
         fetchLatestResult(laneMap, laneName, 'neutronRT').catch((): any => null),
         fetchLatestResult(laneMap, laneName, 'tamperRT').catch((): any => null),
         fetchLatestResult(laneMap, laneName, 'connectionRT').catch((): any => null),
         fetchLatestResult(laneMap, laneName, 'radStatusRT').catch((): any => null),
+        fetchLatestResult(laneMap, laneName, 'locRT').catch((): any => null),
     ]);
 
     // Only pass fields that were actually read so the reducer leaves the rest
@@ -76,23 +78,27 @@ async function reconcileOneLane(
     if (neutron?.result?.alarmState !== undefined) payload.neutronAlarmState = neutron.result.alarmState;
     if (tamper?.result?.tamperStatus !== undefined) payload.tamperStatus = tamper.result.tamperStatus === true;
 
-    // Liveness: the newest stored observation bounds how long the producer has
-    // been silent. A latest-obs that is itself older than the comms threshold
-    // means the producer stopped publishing — its stored isConnected:true
-    // predates the silence, so it must not re-assert green.
-    const newestMs = Math.max(...[gamma, neutron, tamper, connection, radStatus]
+    // Liveness: the newest stored DEVICE observation bounds how long the
+    // detector has been silent. Only the continuously-published streams count
+    // (mirrors HEARTBEAT_STREAMS) — connectionStatus is excluded because the
+    // module keeps stamping it even with the detector's socket dead, and
+    // tamper/occupancy/alarm are event-driven, so their age means nothing.
+    const newestMs = Math.max(...[gamma, neutron, radStatus, loc]
         .map((r) => (r && Number.isFinite(r.timeMs)) ? r.timeMs : -Infinity));
     if (Number.isFinite(newestMs)) {
         LaneStreamRegistry.noteObservedAt(laneName, newestMs);
         if (Date.now() - newestMs > LANE_COMMS_STALE_MS) {
+            // Device data stopped: its stored isConnected:true predates the
+            // silence (or is simply wrong), so it must not re-assert green.
             payload.isConnected = false;
-        } else if (connection?.result?.isConnected !== undefined) {
-            payload.isConnected = connection.result.isConnected === true;
         } else {
-            // Fresh observation but no readable connection stream (e.g. D5):
-            // fresh = alive, same treatment as the live radStatusRT handler.
-            payload.isConnected = true;
+            // Data is flowing; an explicit isConnected:false still wins.
+            payload.isConnected = connection?.result?.isConnected !== false;
         }
+    } else if (connection?.result?.isConnected !== undefined) {
+        // No device heartbeat to judge by — fall back to what the module
+        // reports, same "unjudgeable" stance the live watchdog takes.
+        payload.isConnected = connection.result.isConnected === true;
     }
 
     // Nothing to reconcile (no streams resolved yet) — skip so it retries later.
