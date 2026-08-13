@@ -57,6 +57,7 @@ import {useVehicleOcrMap, VehicleOcrByOccupancy} from "@/app/_components/event-t
 import { AdjudicationCodes } from "@/lib/data/oscar/adjudication/models/AdjudicationConstants";
 import { EventTableColumnSetting, LaneSelection } from "@/lib/layout/PageConfigTypes";
 import { applyFieldOrder, resolveEventTableColumns } from "@/lib/layout/EventTableColumns";
+import EventTableColumnsPanel from "@/app/_components/event-table/EventTableColumnsPanel";
 import { resolveLaneSelection } from "@/lib/data/oscar/streams/LaneStreamRegistry";
 import { useLaneStreams } from "@/lib/data/oscar/streams/useLaneStreams";
 import { GridColumnVisibilityModel } from "@mui/x-data-grid";
@@ -912,15 +913,34 @@ export default function EventTable({
             .map((column) => column.field);
     };
 
+    // What we last handed the owner, until the round trip brings it back as
+    // columnSettings. The Reset button changes visibility and order in one
+    // click, and without this the second change would be computed from the
+    // pre-reset props and discard the first.
+    const pendingSettingsRef = useRef<EventTableColumnSetting[] | null>(null);
+    useEffect(() => {
+        pendingSettingsRef.current = null;
+    }, [columnSettingsKey]);
+
+    const emitColumnSettings = (build: (current: EventTableColumnSetting[]) => EventTableColumnSetting[]) => {
+        if (!columnSettings) return;
+        const next = build(pendingSettingsRef.current ?? resolveEventTableColumns(columnSettings));
+        pendingSettingsRef.current = next;
+        onColumnSettingsChange?.(next);
+    };
+
     const handleColumnVisibilityModelChange = (model: GridColumnVisibilityModel) => {
         // Tracked even when the grid is uncontrolled: the optional Vehicle ID
         // column gates its OCR fetch on being switched on.
         setColumnVisibilityModel(model);
-        if (!columnSettings) return;
         // The model only carries the fields the panel showed, so fold it onto
-        // the resolved settings rather than rebuilding from it.
-        onColumnSettingsChange?.(resolveEventTableColumns(columnSettings).map((col) =>
+        // the current settings rather than rebuilding from it.
+        emitColumnSettings((current) => current.map((col) =>
             model[col.key] !== undefined ? {...col, visible: !!model[col.key]} : col));
+    };
+
+    const handleReorderColumns = (fields: string[]) => {
+        emitColumnSettings((current) => applyFieldOrder(current, fields));
     };
 
     const handleAlarmFilterChange = useCallback((next: AlarmFilterState) => {
@@ -1209,10 +1229,18 @@ export default function EventTable({
                 onRowDoubleClick={handleRowDoubleClick}
                 rowSelectionModel={selectionModel}
                 pageSizeOptions={[15]}
-                slots={{ toolbar: CustomToolbar }}
+                slots={{ toolbar: CustomToolbar, columnsManagement: EventTableColumnsPanel }}
                 slotProps={{
+                    panel: {
+                        // Room for the drag handle and reorder arrows the panel
+                        // adds beside each checkbox; the default 300 clips them.
+                        sx: { '& .MuiDataGrid-paper': { minWidth: 380 } },
+                    },
                     columnsManagement: {
                         getTogglableColumns: getColumnList,
+                        // Only the widget-hosted tables have somewhere to keep an
+                        // order; without this the panel renders as it always did.
+                        onReorderColumns: columnSettings ? handleReorderColumns : undefined,
                     },
                     toolbar: tableMode === 'alarmtable' ? {
                         alarmFilter,
