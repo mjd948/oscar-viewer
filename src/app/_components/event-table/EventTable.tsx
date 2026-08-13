@@ -234,12 +234,20 @@ export default function EventTable({
     useEffect(() => () => { mountedRef.current = false; }, []);
     const locale = navigator.language || 'en-US';
 
+    // minWidth is max(what the header needs, what a typical value needs), plus
+    // ~22px of cell chrome — all measured in the browser, not estimated. Header
+    // labels wrap to two lines (theme: MuiDataGrid.columnHeaderTitle), so the
+    // first term is much smaller than it used to be and the columns whose floor
+    // existed only to keep a long label on one line ("Max Neutron (cps)",
+    // "Secondary Inspection") give ~270px back across the table. The columns
+    // still pinned wide — the timestamps, Status, Vehicle ID — are bound by
+    // their VALUES, where wrapping the header buys nothing.
     const columns: GridColDef<EventTableData>[] = [
         {
             field: 'laneId',
             headerName: t('laneId'),
             type: 'string',
-            minWidth: 100,
+            minWidth: 105,
             flex: 1,
             filterable: false,
             renderCell: (params) => (
@@ -255,7 +263,7 @@ export default function EventTable({
             field: 'occupancyCount',
             headerName: t('occupancyId'),
             type: 'string',
-            minWidth: 125,
+            minWidth: 95,
             flex: 1.5,
             filterable: false
         },
@@ -270,7 +278,7 @@ export default function EventTable({
                 minute: 'numeric',
                 second: 'numeric'
             }),
-            minWidth: 200,
+            minWidth: 165,
             flex: 2,
             type: "dateTime",
             filterOperators: getGridDateOperators(true).filter(
@@ -288,7 +296,7 @@ export default function EventTable({
                 minute: 'numeric',
                 second: 'numeric'
             }),
-            minWidth: 200,
+            minWidth: 165,
             flex: 2,
             type: "dateTime",
             filterOperators: getGridDateOperators(true).filter(
@@ -299,7 +307,7 @@ export default function EventTable({
             field: 'maxGamma',
             headerName: t('maxGamma'),
             valueFormatter: (params) => (typeof params === 'number' ? params : 0),
-            minWidth: 150,
+            minWidth: 105,
             flex: 1.2,
             filterable: false
         },
@@ -307,7 +315,7 @@ export default function EventTable({
             field: 'maxNeutron',
             headerName: t('maxNeutron'),
             valueFormatter: (params) => (typeof params === 'number' ? params : 0),
-            minWidth: 150,
+            minWidth: 105,
             flex: 1.2,
             filterable: false
         },
@@ -339,7 +347,7 @@ export default function EventTable({
         {
             field: 'adjudicationGroup',
             headerName: t('adjudicationStatus'),
-            minWidth: 150,
+            minWidth: 125,
             flex: 1.3,
             filterable: false,
             valueGetter: (_: any, row: EventTableData) => row.adjudicationGroup || 'Not Adjudicated'
@@ -376,7 +384,7 @@ export default function EventTable({
         {
             field: 'secondaryInspection',
             headerName: t('secondaryInspection'),
-            minWidth: 140,
+            minWidth: 95,
             flex: 1.1,
             filterable: false,
             valueGetter: (_: any, row: EventTableData) => row.secondaryInspection || 'NONE'
