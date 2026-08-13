@@ -13,3 +13,8 @@ next-env.d.ts
 # Sentry Config File
 .env.sentry-build-plugin
 /cypress/screenshots
+
+# Claude Code local state — agent worktrees hold a whole checkout, build output
+# included, which otherwise shows up as untracked content here and leaves the
+# parent repo reporting this submodule as dirty. Matches the parent's .gitignore.
+.claude/
