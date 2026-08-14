@@ -1,24 +1,60 @@
 "use client";
 
-import React, {useCallback, useContext, useEffect, useState} from "react";
+import React, {useCallback, useContext, useEffect, useRef, useState} from "react";
 import {EventTableData} from "@/lib/data/oscar/TableHelpers";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {DataGrid, GridColDef} from "@mui/x-data-grid";
 import { Box, Dialog, DialogContent, DialogTitle, Stack, Typography } from "@mui/material";
 import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import DataStream from "osh-js/source/core/consysapi/datastream/DataStream";
+import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
 import {IWebIdIsotope} from "@/lib/data/oscar/adjudication/WebId";
 import WebIdAnalysisResult from "@/lib/data/oscar/adjudication/WebId";
 import {WEB_ID_DEF} from "@/lib/data/Constants";
 import {EventType} from "osh-js/source/core/event/EventType";
 
+// WebID publishes its analysis after the occupancy closes, so bracket the event
+// instead of scanning the datastream: webIdAnalysis grows without bound, and an
+// unfiltered scan gets steadily slower and eventually pages past older results.
+const WEB_ID_WINDOW_LEAD_MS = 60_000;
+const WEB_ID_WINDOW_TRAIL_MS = 15 * 60_000;
+
+/** Keeps the first row per (occupancy, time): a live push can restate a fetched one. */
+function dedupeWebIdResults(results: WebIdAnalysisResult[]): WebIdAnalysisResult[] {
+    const seen = new Set<string>();
+    return results.filter(result => {
+        const key = `${result.occupancyObsId}|${result.time}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
 
 export default function WebIdAnalysis(props: { event: EventTableData; onWebIdResults?: (results: WebIdAnalysisResult[]) => void; }) {
     const laneMapRef = useContext(DataSourceContext).laneMapRef;
 
-    const [webIdLog, setWebIdLog] = useState<any[]>([]);
-    const [filteredLog, setFilteredLog] = useState<any[]>([]);
+    const [webIdLog, setWebIdLog] = useState<WebIdAnalysisResult[]>([]);
+    const [liveResults, setLiveResults] = useState<WebIdAnalysisResult[]>([]);
+    // Rows that arrived over the realtime stream carry no occupancy observation
+    // id (EventTable builds live rows with null), and WebID results are keyed by
+    // it — so resolve it here instead of showing nothing until a page refresh.
+    const [resolvedObsId, setResolvedObsId] = useState<string | null>(null);
     const [expandDialog, setExpandDialog] = useState({ open: false, title: "", text: "" });
+
+    const occupancyObsId = props.event?.occupancyObsId ?? resolvedObsId;
+
+    // The realtime handler is registered at most once per datasource and never
+    // removed: osh-js DataSource.subscribe only appends, and unsubscribing
+    // poisons the shared MQTT topic. So it reads the occupancy from a ref
+    // rather than closing over the event it was created with.
+    const occupancyObsIdRef = useRef<string | null>(occupancyObsId);
+    occupancyObsIdRef.current = occupancyObsId;
+    const subscribedSourceRef = useRef<any>(null);
+
+    const getLaneEntry = useCallback((): LaneMapEntry | null => {
+        if (!props.event?.laneId || !laneMapRef.current) return null;
+        return laneMapRef.current.get(props.event.laneId) ?? null;
+    }, [props.event]);
 
     const locale = navigator.language || 'en-US';
 
@@ -163,49 +199,89 @@ export default function WebIdAnalysis(props: { event: EventTableData; onWebIdRes
         }
     ];
 
-    const fetchData = useCallback(async() => {
-        if (!props.event?.laneId || !laneMapRef.current) return;
-        const currentLane = props.event.laneId;
-        const currLaneEntry: LaneMapEntry = laneMapRef.current.get(currentLane);
-        if (!currLaneEntry) {
-            console.warn("WebIdAnalysis: lane entry not ready yet for:", currentLane);
-            return;
-        }
+    // A live row's occupancy observation id is null until something looks it up,
+    // so resolve it from the lane's occupancy datastream by time bracket.
+    useEffect(() => {
+        setResolvedObsId(null);
+        if (!props.event || props.event.occupancyObsId) return;
 
-        let webIdDatastream: typeof DataStream = currLaneEntry.findDataStreamByObsProperty(WEB_ID_DEF);
-        if(!webIdDatastream) {
+        const laneEntry = getLaneEntry();
+        const occupancyStream: typeof DataStream = laneEntry?.findDataStreamByName("occupancy");
+        if (!occupancyStream) return;
+
+        let cancelled = false;
+        (async () => {
+            try {
+                const query = await occupancyStream.searchObservations(new ObservationFilter({
+                    filter: `startTime='${props.event.startTime}' AND endTime='${props.event.endTime}'`
+                }), 1);
+                const observations = await query.nextPage();
+                if (!cancelled && observations?.length > 0)
+                    setResolvedObsId(observations[0].id);
+            } catch (err) {
+                console.error("Could not resolve occupancy observation id for WebID:", err);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [props.event]);
+
+    const fetchData = useCallback(async (cancel: { done: boolean }) => {
+        const currLaneEntry = getLaneEntry();
+        if (!currLaneEntry || !occupancyObsId) return;
+
+        const webIdDatastream: typeof DataStream = currLaneEntry.findDataStreamByObsProperty(WEB_ID_DEF);
+        if (!webIdDatastream) {
             console.warn("No WebID Analysis datastream found for this lane");
             return;
         }
 
-        let query = await webIdDatastream.searchObservations(undefined, 100);
+        const from = new Date(new Date(props.event.startTime).getTime() - WEB_ID_WINDOW_LEAD_MS);
+        const to = new Date(new Date(props.event.endTime).getTime() + WEB_ID_WINDOW_TRAIL_MS);
+        if (isNaN(from.getTime()) || isNaN(to.getTime())) return;
 
+        const query = await webIdDatastream.searchObservations(new ObservationFilter({
+            resultTime: `${from.toISOString()}/${to.toISOString()}`
+        }), 100);
+
+        // Accumulate across pages: observations come back oldest-first, so
+        // setting state per page kept only the last page and dropped older
+        // occupancies once the datastream outgrew a single page.
+        const collected: WebIdAnalysisResult[] = [];
         while (query.hasNext()) {
-            let obsCollection = await query.nextPage();
-
-            let webIdData = obsCollection.map((obs: any)=> {
-                return new WebIdAnalysisResult(obs.resultTime, obs.result);
-            })
-            setWebIdLog(webIdData)
+            const obsCollection = await query.nextPage();
+            if (cancel.done) return;
+            collected.push(...obsCollection.map((obs: any) => new WebIdAnalysisResult(obs.resultTime, obs.result)));
         }
-    },[])
+        if (cancel.done) return;
+
+        setWebIdLog(collected.filter(result => result?.occupancyObsId === occupancyObsId));
+    }, [props.event, occupancyObsId]);
 
     useEffect(() => {
-        if (props.event)
-            fetchData();
-    }, [props.event]);
+        // results are per-occupancy; drop the previous event's before refetching
+        setWebIdLog([]);
+        setLiveResults([]);
+        if (!props.event || !occupancyObsId) return;
 
+        const cancel = {done: false};
+        fetchData(cancel).catch(err => console.error("Error fetching webIdAnalysis observations:", err));
+
+        return () => {
+            cancel.done = true;
+        };
+    }, [props.event, occupancyObsId]);
+
+    // realtime: an alarm's analysis typically lands after the form opens, so
+    // subscribe while this occupancy is on screen
     useEffect(() => {
-        if (!props.event?.laneId || !laneMapRef.current) return;
-        const currentLane = props.event.laneId;
-        const currLaneEntry: LaneMapEntry = laneMapRef.current.get(currentLane);
-        if (!currLaneEntry) {
-            console.warn("WebIdAnalysis: lane entry not ready yet for:", currentLane);
-            return;
-        }
+        const currLaneEntry = getLaneEntry();
+        if (!currLaneEntry) return;
 
-        let webIdStream = currLaneEntry.findDataStreamByObsProperty(WEB_ID_DEF);
-        if(!webIdStream) {
+        const webIdStream = currLaneEntry.findDataStreamByObsProperty(WEB_ID_DEF);
+        if (!webIdStream) {
             console.warn("No WebID Analysis datastream found for this lane");
             return;
         }
@@ -218,15 +294,17 @@ export default function WebIdAnalysis(props: { event: EventTableData; onWebIdRes
             console.warn("No WebID Analysis data source found for this lane");
             return;
         }
+        if (subscribedSourceRef.current === webIdSource) return;
+        subscribedSourceRef.current = webIdSource;
 
         const handleObservations = (msg: any) => {
             const data = msg.values?.[0]?.data;
             if (!data) return;
 
             const webId = new WebIdAnalysisResult(data.timestamp, data);
-            if (webId.occupancyObsId !== props.event.occupancyObsId) return;
+            if (webId.occupancyObsId !== occupancyObsIdRef.current) return;
 
-            setFilteredLog(prev => {
+            setLiveResults(prev => {
                 const exists = prev.some(item => item.occupancyObsId === webId.occupancyObsId && item.time === webId.time);
                 if (exists) return prev;
                 return [webId, ...prev];
@@ -240,18 +318,17 @@ export default function WebIdAnalysis(props: { event: EventTableData; onWebIdRes
         } catch (err) {
             console.error("Error connecting webid source:", err);
         }
-    }, [props.event]);
+    }, [props.event, occupancyObsId]);
 
-
-    useEffect(() => {
-        let filteredLog = webIdLog.filter((data) => data?.occupancyObsId ==  props.event.occupancyObsId);
-        setFilteredLog(filteredLog);
-    }, [webIdLog]);
+    // Derived rather than state: a previously-viewed occupancy's rows must
+    // never render under the current one.
+    const results = dedupeWebIdResults(
+        [...liveResults, ...webIdLog].filter(result => result?.occupancyObsId === occupancyObsId));
 
     useEffect(() => {
         if (!props.onWebIdResults) return;
-        props.onWebIdResults(filteredLog);
-    }, [filteredLog]);
+        props.onWebIdResults(results);
+    }, [webIdLog, liveResults]);
 
     return (
         <Stack spacing={2} sx={{ width: '100%' }}>
@@ -262,7 +339,7 @@ export default function WebIdAnalysis(props: { event: EventTableData; onWebIdRes
             </Stack>
             <Box sx={{ width: '100%' }}>
                 <DataGrid
-                    rows={filteredLog}
+                    rows={results}
                     columns={logColumns}
                     initialState={{
                         pagination: {
