@@ -8,6 +8,7 @@ import {setLaneMap} from "@/lib/state/OSCARLaneSlice";
 import {AppDispatch, RootState} from "@/lib/state/Store";
 import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import {INode, Node, NodeOptions} from "@/lib/data/osh/Node";
+import {loadRuntimeConfig} from "@/lib/config/RuntimeConfig";
 
 
 
@@ -29,9 +30,19 @@ export default function DataSourceProvider({children}: { children: ReactNode }) 
     const laneMapRef = useRef<Map<string, LaneMapEntry>>(new Map<string, LaneMapEntry>());
 
 
+    // Seeding the node list now involves an async fetch of the runtime config, and this
+    // effect re-runs on every change to `nodes` - including the one the seeding itself
+    // causes. Without a guard the in-flight load would be started repeatedly and could
+    // add the default node more than once.
+    const bootstrapping = useRef(false);
+
     useEffect(() => {
-        if (!nodes || nodes.length == 0)
-            dispatch(initializeDefaultNode());
+        if (nodes && nodes.length > 0) return;
+        if (bootstrapping.current) return;
+
+        bootstrapping.current = true;
+        Promise.resolve(dispatch(initializeDefaultNode()))
+            .finally(() => { bootstrapping.current = false; });
     }, [nodes]);
 
 
@@ -106,21 +117,43 @@ export default function DataSourceProvider({children}: { children: ReactNode }) 
     );
 };
 
-export const initializeDefaultNode = () => (dispatch: AppDispatch) => {
-    const hostName = window.location.hostname;
-    const port = window.location.port;
-    const isSecure = window.location.protocol === "https:";
+/**
+ * Seeds the node list on first run, when localStorage holds nothing yet.
+ *
+ * Prefers the endpoint an installer wrote to oscar-config.json, and falls back to
+ * deriving it from the current origin - which is correct whenever the node is serving
+ * this app, and wrong when anything else is (notably the desktop client).
+ *
+ * Credentials deliberately come only from the runtime config. They used to be
+ * hardcoded here as admin/oscar, which compiled the default administrator password
+ * into the shipped JavaScript bundle where anyone who could load the page could read
+ * it. With none configured the node answers 401 and the app routes to the Servers
+ * page, which is the correct place to enter them.
+ */
+export const initializeDefaultNode = () => async (dispatch: AppDispatch) => {
+    const runtime = await loadRuntimeConfig();
+    const configured = runtime?.node;
 
-    const initialNodeOpts: NodeOptions = {
-        name: "Local Node",
-        address: hostName,
-        port: Number(port),
-        oshPathRoot: "/sensorhub",
-        csAPIEndpoint: "/api",
-        auth: { username: "admin", password: "oscar" },
-        isSecure: isSecure,
-        isDefaultNode: true
-    };
+    const initialNodeOpts: NodeOptions = configured
+        ? {
+            name: configured.name ?? "Local Node",
+            address: configured.address,
+            port: configured.port,
+            oshPathRoot: configured.oshPathRoot ?? "/sensorhub",
+            csAPIEndpoint: configured.csAPIEndpoint ?? "/api",
+            auth: configured.auth ?? undefined,
+            isSecure: configured.isSecure ?? false,
+            isDefaultNode: true
+        }
+        : {
+            name: "Local Node",
+            address: window.location.hostname,
+            port: Number(window.location.port),
+            oshPathRoot: "/sensorhub",
+            csAPIEndpoint: "/api",
+            isSecure: window.location.protocol === "https:",
+            isDefaultNode: true
+        };
 
     const defaultNode = new Node(initialNodeOpts);
     dispatch(addNode(defaultNode));
