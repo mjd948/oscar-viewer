@@ -18,3 +18,9 @@ next-env.d.ts
 # included, which otherwise shows up as untracked content here and leaves the
 # parent repo reporting this submodule as dirty. Matches the parent's .gitignore.
 .claude/
+# Generated at build time by scripts/copy-hls-worker.js (kept in lockstep with the
+# installed hls.js version, so it must not be committed).
+public/hls.worker.js
+
+# PerfSoak run artifacts (see cypress/e2e/PerfSoak.cy.tsx)
+cypress/perf-*.json

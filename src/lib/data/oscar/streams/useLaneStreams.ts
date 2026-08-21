@@ -39,12 +39,17 @@ export function useLaneStreams(
 
     const selectionKey = JSON.stringify(selection);
     const streamsKey = streams.join(',');
-    const laneMapSize = laneMapFromStore?.size ?? 0;
+    // Keyed on the lane map's IDENTITY, not its size. setLaneMap replaces the
+    // whole map, so identity changes exactly when laneMapRef.current is
+    // rebuilt. Size did not: a node refetch that returned the same lane count
+    // produced fresh LaneMapEntry objects (and fresh datasources) without ever
+    // re-running acquire, leaving every handler bound to the discarded ones.
+    const laneMapVersion = laneMapFromStore;
 
     const laneIds = useMemo(
         () => resolveLaneSelection(selection, laneMapRef.current),
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        [selectionKey, laneMapSize, laneMapRef]
+        [selectionKey, laneMapVersion, laneMapRef]
     );
 
     useEffect(() => {
@@ -60,7 +65,7 @@ export function useLaneStreams(
             LaneStreamRegistry.release(bundleId);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [enabled, selectionKey, streamsKey, laneMapSize]);
+    }, [enabled, selectionKey, streamsKey, laneMapVersion]);
 
     return {laneIds};
 }

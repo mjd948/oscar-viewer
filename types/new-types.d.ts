@@ -101,7 +101,6 @@ export type LaneStatusType = {
 export interface LaneWithLocation{
   laneName: string,
   locationSources: typeof ConSysApi[],
-  status: string
 }
 
 

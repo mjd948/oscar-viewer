@@ -18,10 +18,27 @@ import LaneViewReducer from "@/lib/state/LaneViewSlice";
 import PageLayoutReducer from "@/lib/state/PageLayoutSlice";
 import LaneStatusReducer from "@/lib/state/LaneStatusSlice";
 
-const persistConfig ={
+const persistConfig = {
     key: 'root',
     storage,
-    whitelist: ['oscarClientSlice', 'eventPreview', 'laneSlice', 'laneView', 'eventLogSlice', "eventDetails", 'pageLayoutSlice', 'laneStatusSlice'],
+    // Deliberately NOT persisted:
+    //  - laneSlice holds a Map of live osh-js ConSysApi objects. JSON.stringify
+    //    of a Map is '{}', so it persisted nothing useful while rehydrating
+    //    laneMap as a plain object — the reason convertToMap() has to be
+    //    sprinkled through EventTable/MapComponent/useMobileDetectors.
+    //    OSCARLaneSlice now also refuses inbound rehydrate outright.
+    //  - eventLogSlice holds a selectedEvent snapshot that is stale the moment
+    //    the page reloads, and setAlarmTrigger dirties it from realtime traffic.
+    //    (The event-details page reads eventPreview, which IS still persisted.)
+    whitelist: ['oscarClientSlice', 'eventPreview', 'laneView', "eventDetails", 'pageLayoutSlice', 'laneStatusSlice'],
+    // NOTE: deliberately NO `throttle`. It was tried (1000ms) to coalesce
+    // redux-persist@5's full-blob rewrites, but the write amplification it was
+    // aimed at came from lane-view/LaneStatus dispatching setLastLaneStatus on
+    // every realtime message — that dispatch is gone, and what remains is
+    // user-paced. A throttle only buys burst coalescing now, and it costs real
+    // durability: EventTableColumnResize/Reorder caught it, because a layout
+    // reset or a column drag was still unwritten a second later. Persisting
+    // user settings promptly is worth more than the saved rewrites.
     version: 1,
 }
 

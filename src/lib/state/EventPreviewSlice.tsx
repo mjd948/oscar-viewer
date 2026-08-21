@@ -27,7 +27,6 @@ export const Slice = createSlice({
     initialState: initState,
     reducers: {
         setEventPreview: (state, action: PayloadAction<{ isOpen: boolean; eventData: EventTableData | null }>) => {
-            console.log("Setting event preview:", action.payload);
             state.eventPreview = {
                 isOpen: action.payload.isOpen,
                 eventData: action.payload.eventData,
@@ -47,7 +46,6 @@ export const Slice = createSlice({
             };
         },
         setShouldForceAlarmTableDeselect: (state, action: PayloadAction<boolean>) => {
-            console.log(`Setting shouldForceAlarmTableDeselect to ${action.payload}`);
             state.shouldForceAlarmTableDeselect = action.payload;
         },
         toggleShouldForceAlarmTableDeselect: (state) => {

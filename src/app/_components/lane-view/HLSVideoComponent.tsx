@@ -3,6 +3,10 @@
 import React, {MutableRefObject, useEffect, useRef, useState} from 'react';
 import type HlsJs from "hls.js";
 import {INode} from "@/lib/data/osh/Node";
+import {nodeFileServerUrl} from "@/lib/config/RuntimeConfig";
+
+/** Served from the export root; written by scripts/copy-hls-worker.js. */
+const HLS_WORKER_PATH = '/hls.worker.js';
 
 export default function HLSVideoComponent({
     videoSource,
@@ -28,8 +32,7 @@ export default function HLSVideoComponent({
         if (!videoSource || !selectedNode || !videoRef.current)
             return;
 
-        const tls = selectedNode.isSecure ? "s" : "";
-        const src = `http${tls}://${selectedNode.address}:${selectedNode.port}${selectedNode.oshPathRoot}/buckets/${videoSource}`;
+        const src = nodeFileServerUrl(selectedNode, videoSource);
 
         let destroyed = false;
         retryRef.current = 0;
@@ -51,11 +54,26 @@ export default function HLSVideoComponent({
             const errorRetry = {maxNumRetry: 6, retryDelayMs: 1000, maxRetryDelayMs: 8000};
 
             const hlsjsConfig = {
-                // Our bundler transpiles hls.js, so the stringified inline-worker
-                // bootstrap references helpers that don't exist in the worker scope
-                // (ReferenceError from blob: URL); hls.js then falls back to
-                // main-thread transmuxing anyway. Disable the worker explicitly.
-                enableWorker: false,
+                // Transmuxing MUST stay off the main thread: several video widgets
+                // on one dashboard put a burst of demux/remux work per segment,
+                // per stream, in direct competition with paint.
+                //
+                // hls.js's DEFAULT inline worker cannot do that here — it
+                // stringifies a bootstrap function, and once webpack has wrapped
+                // the module that source references helpers absent from worker
+                // scope (ReferenceError from the blob: URL), after which hls.js
+                // quietly falls back to the main thread. workerPath sidesteps the
+                // bundler entirely by loading a real file with `new Worker(url)`;
+                // scripts/copy-hls-worker.js keeps it in lockstep with the
+                // installed hls.js version at build time.
+                //
+                // No fallback code needed: hls.js wraps worker setup in try/catch
+                // and degrades to inline transmuxing on failure, so the worst case
+                // is the behaviour we had before. hls.js also shares one worker per
+                // workerPath across every Hls instance, so all the tiles on a page
+                // cost one worker between them.
+                enableWorker: true,
+                workerPath: HLS_WORKER_PATH,
                 // The simulator emits ~1s segments with only a few in the live window. Sit
                 // right at the live edge; the default sync target sits outside that window
                 // and would stall permanently.

@@ -82,8 +82,10 @@ export interface UseHlsStreamResult {
  */
 export function useHlsStream(laneId: string | null, streamId?: string): UseHlsStreamResult {
     const {laneMapRef} = useContext(DataSourceContext);
-    const laneMapFromStore = useSelector((state: RootState) => selectLaneMap(state));
-    const laneMapSize = laneMapFromStore?.size ?? 0;
+    // Identity, not size — a node refetch returning the same lane count still
+    // produces fresh LaneMapEntry objects, and the control streams read below
+    // have to be re-read from them (same fix as useLaneStreams).
+    const laneMapVersion = useSelector((state: RootState) => selectLaneMap(state));
 
     const [videoSource, setVideoSource] = useState<string | null>(null);
     const [streams, setStreams] = useState<typeof ControlStream[]>([]);
@@ -106,7 +108,7 @@ export function useHlsStream(laneId: string | null, streamId?: string): UseHlsSt
         }, []);
         setStreams(unique);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [laneId, laneMapSize]);
+    }, [laneId, laneMapVersion]);
 
     const activeStreamId = useMemo(() => {
         if (streams.length === 0) return null;

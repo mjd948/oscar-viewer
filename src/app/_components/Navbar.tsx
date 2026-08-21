@@ -45,6 +45,7 @@ import {PageConfig} from "@/lib/layout/PageConfigTypes";
 import {getPageIcon} from "@/app/_components/layout/WidgetRegistry";
 import AddPageDialog from "@/app/_components/layout/AddPageDialog";
 import {HeaderSlotProvider} from "@/app/_components/layout/HeaderSlot";
+import PerfOverlay from "@/app/_components/dev/PerfOverlay";
 
 const drawerWidth = 240;
 const drawerWidthMobile = 200;
@@ -510,6 +511,8 @@ export default function Navbar({children}: { children: React.ReactNode }) {
             <Box sx={{display: "none"}}>
                 <AlarmAudio/>
             </Box>
+            {/* Inert unless the page URL carries ?perf=1 */}
+            <PerfOverlay/>
             <AddPageDialog open={addPageOpen} onClose={() => setAddPageOpen(false)}/>
             <Box
                 component="main"

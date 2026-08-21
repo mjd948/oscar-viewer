@@ -30,6 +30,8 @@ import {INode} from "@/lib/data/osh/Node";
 import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
 import { convertToMap } from "@/app/utils/Utils";
 import DataStreamFilter from "osh-js/source/core/consysapi/datastream/DataStreamFilter.js";
+import {nodeFileServerUrl} from "@/lib/config/RuntimeConfig";
+import {countRender} from "@/app/_components/dev/perfProbe";
 
 const ALARM_COLOR = '#d32f2f';
 const NORMAL_COLOR = '#2e7d32';
@@ -59,6 +61,7 @@ export default function MapComponent({
     showMobileUnits = true, showTrail = true, trailLength = 300,
     showAlarmMarkers = true, alarmTimeWindow = 'today',
 }: MapComponentProps) {
+    countRender('MapComponent');
     const mapcontainer: string = containerId ?? "mapcontainer";
     const laneMap = useSelector((state: RootState) => selectLaneMap(state));
     const leafletViewRef = useRef<typeof LeafletView | null>(null);
@@ -79,6 +82,16 @@ export default function MapComponent({
 
     // Leaflet circleMarkers keyed by lane name, updated directly on alarm changes
     const markersByLane = useRef<Map<string, L.CircleMarker>>(new Map());
+    // Lanes that already have a PointMarkerLayer wired up. This must be its own
+    // ledger and NOT markersByLane: the circleMarker is created lazily inside
+    // the layer's getLocation callback, i.e. only once the first location
+    // observation lands. Guarding on the marker meant every re-run of the layer
+    // effect built another PointMarkerLayer for any lane still waiting on its
+    // first fix -- and osh-js View.addLayer opens two BroadcastChannels per
+    // datasource per layer and never closes or dedupes them, so those piled up
+    // for the life of the page and every subsequent message fanned out to all
+    // of them.
+    const layersByLane = useRef<Set<string>>(new Set());
     const gammaAlarmByLane = useRef<Map<string, boolean>>(new Map());
     const neutronAlarmByLane = useRef<Map<string, boolean>>(new Map());
     const offlineByLane = useRef<Map<string, boolean>>(new Map());
@@ -111,34 +124,26 @@ export default function MapComponent({
         }, 800);
     }, []);
 
-    useEffect(() =>{
-        if(locationList == null || locationList.length === 0 && laneMap.size > 0) {
-            let locations: LaneWithLocation[] = [];
+    // One entry per lane, carrying that lane's own location datasources. The
+    // previous shape looped every lane over EVERY location datastream in the
+    // map and pushed an entry per pair, so five lanes with a location stream
+    // each produced 25 entries of which 20 had an empty locationSources array.
+    useEffect(() => {
+        const laneMapToMap = convertToMap(laneMap);
+        if (laneMapToMap.size === 0 || dsLocations.length === 0) return;
 
-            const laneMapToMap = convertToMap(laneMap);
+        const locationResources = new Set<string>(
+            dsLocations.map((ds: any) => `/datastreams/${ds.properties.id}/observations`));
 
-            laneMapToMap.forEach((value, key) => {
-                if (laneMapToMap.has(key)) {
-                    if (laneFilterSet && !laneFilterSet.has(key)) return;
-                    let ds: LaneMapEntry = laneMapToMap.get(key);
-
-                    dsLocations.map((dss) => {
-                        const locationSources = ds.datasourcesBatch.filter((item) =>
-                            (item.properties.resource === ("/datastreams/" + dss.properties.id + "/observations")))
-
-                        const laneWithLocation: LaneWithLocation = {
-                            laneName: key,
-                            locationSources: locationSources,
-                            status: 'None',
-                        };
-
-                        locations.push(laneWithLocation);
-                    });
-                }
-            });
-            setLocationList(locations);
-        }
-
+        const locations: LaneWithLocation[] = [];
+        laneMapToMap.forEach((entry: LaneMapEntry, key: string) => {
+            if (laneFilterSet && !laneFilterSet.has(key)) return;
+            const locationSources = (entry.datasourcesBatch ?? []).filter(
+                (item: any) => locationResources.has(item.properties.resource));
+            if (locationSources.length === 0) return;
+            locations.push({laneName: key, locationSources});
+        });
+        setLocationList(locations);
     }, [laneMap, dsLocations, laneFilterSet]);
 
     const datasourceSetup = useCallback(async () => {
@@ -174,28 +179,24 @@ export default function MapComponent({
                 if (isConnected == undefined) return;
                 offlineByLane.current.set(laneName, !isConnected);
                 updateMarkerColor(laneName);
-                updateLocationList(laneName, isConnected ? 'Online' : 'Offline');
                 break;
             }
             case 'gammaRT': {
                 const alarmstate = message.values[0].data.alarmState;
                 gammaAlarmByLane.current.set(laneName, alarmstate === 'Alarm');
                 updateMarkerColor(laneName);
-                updateLocationList(laneName, alarmstate);
                 break;
             }
             case 'neutronRT': {
                 const alarmstate = message.values[0].data.alarmState;
                 neutronAlarmByLane.current.set(laneName, alarmstate === 'Alarm');
                 updateMarkerColor(laneName);
-                updateLocationList(laneName, alarmstate);
                 break;
             }
             case 'tamperRT': {
-                const tamperState = message.values[0].data.tamperStatus;
-                if (tamperState) {
-                    updateLocationList(laneName, 'Tamper');
-                }
+                // Tamper has no marker styling of its own (the Lane Status chip
+                // carries it); nothing to do here beyond keeping the
+                // subscription alive for liveness stamping.
                 break;
             }
         }
@@ -250,6 +251,7 @@ export default function MapComponent({
                 leafletViewRef.current.destroy();
                 leafletViewRef.current = undefined;
                 markersByLane.current.clear();
+                layersByLane.current.clear();
                 markerLatLngs.current = [];
                 hasSiteDiagram.current = false;
             }
@@ -271,8 +273,10 @@ export default function MapComponent({
     useEffect(() => {
         if (locationList && locationList.length > 0 && isInit) {
             locationList.forEach((location) => {
-                // Skip lanes that already have a marker created
-                if (markersByLane.current.has(location.laneName)) return;
+                // Exactly one layer set per lane, for the life of the map (see
+                // layersByLane). Re-running this effect must never add a second.
+                if (layersByLane.current.has(location.laneName)) return;
+                layersByLane.current.add(location.laneName);
 
                 location.locationSources.forEach((loc: any) => {
                     let newPointMarker = new PointMarkerLayer({
@@ -325,18 +329,14 @@ export default function MapComponent({
             });
         }
 
-        return () => {
-            if (locationList && locationList.length > 0) {
-                locationList.forEach((location) => {
-                    // location.locationSources.map((src: any) => { if (src.isConnected()) src.disconnect(); });
-                });
-            }
-        }
-
+        // Deliberately no cleanup: these batch datasources are shared osh-js
+        // instances and disconnect is a one-way door there (see the
+        // LaneStreamRegistry class comment). They are torn down with the whole
+        // LeafletView when the map unmounts.
     }, [locationList, isInit]);
 
     const getSiteDiagramPath = (path: string, node: INode) => {
-        return node.isSecure ? `https://${node.address}:${node.port}${node.oshPathRoot}/buckets/${path}` : `http://${node.address}:${node.port}${node.oshPathRoot}/buckets/${path}`;
+        return nodeFileServerUrl(node, path);
     }
 
     useEffect(() => {
@@ -399,24 +399,6 @@ export default function MapComponent({
         })
 
     }, [isInit, nodes]);
-
-    const updateLocationList = (laneName: string, newStatus: string) => {
-        setLocationList((prevState) => {
-            const updatedList = prevState.map((data) =>
-                data.laneName === laneName ? {...data, status: newStatus} : data
-            );
-            return updatedList;
-        });
-    };
-
-    function getContent(status: string, laneName: string) {
-        return (
-            `<div id='popup-data-layer' class='point-popup'><hr/>
-                <h3 class='popup-text-status'>Status: ${status}</h3>
-                <button onClick='location.href="/lane-view"' class="popup-button" type="button">VIEW LANE</button>
-            </div>`
-        );
-    }
 
     return (
         <Box

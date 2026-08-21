@@ -13,9 +13,10 @@ const STALE_MS = 15_000;
 // 30_000 / 200 = 150. Fixed bar count → constant bar thickness via Chart.js category scale.
 const MAX_POINTS = WINDOW_MS / TICK_MS;
 
-interface DataPoint {
-    time: number;
-    value: number | null;
+/** hh:mm:ss for the category axis. Hoisted: called once per tick, per chart. */
+function clockLabel(ms: number): string {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
 }
 
 /** Imperative feed for the scrolling chart: push readings from any source. */
@@ -46,7 +47,17 @@ export const ScrollingBarChartCore = forwardRef<ScrollingChartHandle, ScrollingB
     function ScrollingBarChartCore({ title, barColor, showThreshold = false, height = 250, showTitle = true }, ref) {
         const canvasRef = useRef<HTMLCanvasElement>(null);
         const chartRef = useRef<Chart | null>(null);
-        const pointsRef = useRef<DataPoint[]>([]);
+        // Rolling window kept as the two arrays Chart.js actually reads, pushed
+        // and shifted in place by the tick. They used to be rebuilt wholesale
+        // every 200ms — 150 Date objects and three fresh arrays per chart, five
+        // times a second — to add exactly one sample.
+        const labelsRef = useRef<string[]>([]);
+        const valuesRef = useRef<(number | null)[]>([]);
+        // The threshold is drawn as a flat line at the CURRENT value across the
+        // window, not a per-sample history, so this only has to be rebuilt when
+        // the value changes or the window is still filling.
+        const thresholdSeriesRef = useRef<number[]>([]);
+        const thresholdSeriesValueRef = useRef<number | null>(null);
         const thresholdRef = useRef<number | null>(null);
         // Latest reading from the datasource (carry-forward source for the timer tick).
         const lastValueRef = useRef<number | null>(null);
@@ -148,17 +159,26 @@ export const ScrollingBarChartCore = forwardRef<ScrollingChartHandle, ScrollingB
             const chart = chartRef.current;
             if (!chart) return;
 
-            const points = pointsRef.current;
-            const labels = points.map(p => {
-                const d = new Date(p.time);
-                return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
-            });
+            const series = thresholdSeriesRef.current;
+            const threshold = thresholdRef.current;
+            if (showThreshold && threshold != null) {
+                const want = valuesRef.current.length;
+                if (thresholdSeriesValueRef.current !== threshold) {
+                    series.length = 0;
+                    thresholdSeriesValueRef.current = threshold;
+                }
+                while (series.length < want) series.push(threshold);
+                while (series.length > want) series.shift();
+            } else if (series.length > 0) {
+                series.length = 0;
+                thresholdSeriesValueRef.current = null;
+            }
 
-            chart.data.labels = labels;
-            chart.data.datasets[0].data = points.map(p => p.value);
-            chart.data.datasets[1].data = (showThreshold && thresholdRef.current != null)
-                ? points.map(() => thresholdRef.current as number)
-                : [];
+            // Same array identities every tick; Chart.js re-reads their contents
+            // on update, so there is nothing to reassign.
+            chart.data.labels = labelsRef.current;
+            chart.data.datasets[0].data = valuesRef.current;
+            chart.data.datasets[1].data = series;
 
             chart.update('none');
         }, [showThreshold]);
@@ -183,9 +203,11 @@ export const ScrollingBarChartCore = forwardRef<ScrollingChartHandle, ScrollingB
                 // dropped feed is visually obvious instead of silently held forever.
                 const value = stale ? null : lastValueRef.current;
 
-                pointsRef.current.push({ time: now, value });
-                while (pointsRef.current.length > MAX_POINTS) {
-                    pointsRef.current.shift();
+                labelsRef.current.push(clockLabel(now));
+                valuesRef.current.push(value);
+                while (valuesRef.current.length > MAX_POINTS) {
+                    labelsRef.current.shift();
+                    valuesRef.current.shift();
                 }
 
                 renderChartRef.current();

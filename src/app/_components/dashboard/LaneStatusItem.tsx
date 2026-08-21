@@ -22,7 +22,14 @@ const HEARTBEAT_KF = {
     },
 };
 
-export default function LaneStatusItem(props: {
+/**
+ * Memoized: the parent rebuilds its whole status list whenever any lane pulses,
+ * so without this a heartbeat on one lane re-rendered every chip on the widget
+ * — each one re-serializing two Tooltips, a Paper and the keyframe block
+ * through emotion. All props are primitives, so the default shallow compare is
+ * exactly right.
+ */
+function LaneStatusItem(props: {
     id: number | string;
     name: string;
     parentNode: string;
@@ -103,3 +110,5 @@ export default function LaneStatusItem(props: {
         </Paper>
     );
 }
+
+export default React.memo(LaneStatusItem);

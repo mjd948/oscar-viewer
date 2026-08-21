@@ -6,7 +6,6 @@ import CircleRoundedIcon from '@mui/icons-material/CircleRounded';
 import {capitalize, Stack, Typography} from '@mui/material';
 
 export default function LaneItem(props: {
-    id: number;
     name: string;
     status: string;
 }) {
@@ -24,7 +23,7 @@ export default function LaneItem(props: {
     if (props.status == "none")
         return (<></>)
     return (
-        <Paper key={props.id} variant='outlined' color='#fff' sx={{ cursor: 'pointer', padding: 1,
+        <Paper variant='outlined' color='#fff' sx={{ cursor: 'pointer', padding: 1,
             backgroundColor: (
                 props.status == "Alarm" ? "errorHighlight"
                     : props.status == 'Tamper' ? "secondaryHighlight"

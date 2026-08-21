@@ -16,6 +16,7 @@ import {useStalenessSweep} from "@/lib/data/oscar/streams/useStalenessSweep";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {applyStatusUpdate, ensureLanes, markCommsLost, selectLaneStatusMap, silenceAlarms} from "@/lib/state/LaneStatusSlice";
 import {isMobileLane} from "@/lib/data/oscar/LaneCollection";
+import {countRender} from "@/app/_components/dev/perfProbe";
 
 /** One rendered chip, derived from the persisted per-lane status entry. */
 interface RenderedLaneStatus {
@@ -37,13 +38,28 @@ interface RenderedLaneStatus {
 // stopped reporting (its alarm/occupancy streams are event-driven).
 const STATUS_STREAMS: LaneStreamName[] = ['connectionRT', 'gammaRT', 'neutronRT', 'tamperRT', 'occRT', 'rs350AlarmRT', 'radStatusRT', 'locRT'];
 
+/**
+ * How often accumulated liveness pulses are committed to React state.
+ *
+ * Every stream in STATUS_STREAMS publishes at roughly 1 Hz, so a per-message
+ * commit meant (lanes x streams) renders a second -- each one rebuilding
+ * statusList and re-rendering every chip on the widget. The heartbeat itself is
+ * a 0.6s animation, so quantising its trigger to this cadence is invisible
+ * while capping the widget at 1000/PULSE_FLUSH_MS renders a second.
+ */
+const PULSE_FLUSH_MS = 250;
+
 export default function LaneStatus(props: { lanes?: LaneSelection, hideTitle?: boolean }) {
+    countRender('LaneStatus');
     const lanes: LaneSelection = props.lanes ?? {mode: 'all'};
     const [ackDialog, setAckDialog] = useState<{ laneName: string } | null>(null);
     // Per-lane liveness pulse — kept in local state (NOT the persisted slice) so
     // frequent heartbeat/background messages don't churn localStorage. Only real
     // status transitions change the persisted slice.
+    //
+    // Messages land in the ref (free); the interval below is what reaches React.
     const [pulses, setPulses] = useState<Record<string, number>>({});
+    const pulseRef = useRef<Record<string, number>>({});
 
     const audioContextRef = useRef<AudioContext | null>(null);
     const alarmIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -59,8 +75,24 @@ export default function LaneStatus(props: { lanes?: LaneSelection, hideTitle?: b
     const laneStatusMapRef = useRef(laneStatusMap);
     laneStatusMapRef.current = laneStatusMap;
 
-    const bumpPulse = (laneName: string) =>
-        setPulses((p) => ({...p, [laneName]: (p[laneName] ?? 0) + 1}));
+    const bumpPulse = (laneName: string) => {
+        pulseRef.current[laneName] = (pulseRef.current[laneName] ?? 0) + 1;
+    };
+
+    // Lane keys are only ever added, so comparing the accumulator's own keys is
+    // enough to decide whether anything moved since the last commit.
+    useEffect(() => {
+        const id = setInterval(() => {
+            setPulses((prev) => {
+                const next = pulseRef.current;
+                for (const name in next) {
+                    if (prev[name] !== next[name]) return {...next};
+                }
+                return prev;
+            });
+        }, PULSE_FLUSH_MS);
+        return () => clearInterval(id);
+    }, []);
 
     const {laneIds} = useLaneStreams(lanes, STATUS_STREAMS, (laneName, stream, message) => {
         switch (stream) {

@@ -1,11 +1,9 @@
 "use client";
 
 import {LaneStatusType} from '../../../../types/new-types';
-import React, {useContext, useEffect, useRef, useState} from 'react';
+import React, {useContext, useEffect, useState} from 'react';
 
 import LaneItem from './LaneItem';
-import {setLastLaneStatus} from "@/lib/state/LaneViewSlice";
-import {useAppDispatch} from "@/lib/state/Hooks";
 import DataStreams from "osh-js/source/core/consysapi/datastream/DataStreams.js";
 import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter.js";
 import {useLaneStreams} from "@/lib/data/oscar/streams/useLaneStreams";
@@ -17,8 +15,6 @@ interface LaneStatusProps {
 }
 
 export default function LaneStatus({laneName}: LaneStatusProps) {
-    const dispatch = useAppDispatch();
-    const idVal = useRef(1);
     const [laneStatus, setLaneStatus] = useState<LaneStatusType>();
     const {laneMapRef} = useContext(DataSourceContext);
 
@@ -81,20 +77,25 @@ export default function LaneStatus({laneName}: LaneStatusProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [laneName, laneIds.length]);
 
+    /**
+     * gammaRT and neutronRT both publish at ~1 Hz and almost always repeat the
+     * same alarmState, so this used to re-render — and, through a
+     * setLastLaneStatus dispatch into the PERSISTED laneView slice whose
+     * payload carried an ever-incrementing id, rewrite localStorage — twice a
+     * second per lane, forever. Nothing ever read lastLaneStatus, so the
+     * dispatch is gone and only real transitions reach React.
+     */
     function updateStatus(name: string, newState: string) {
-        const newStatus: LaneStatusType = {
-            id: idVal.current++,
-            name: name,
-            status: newState
-        }
-        setLaneStatus(newStatus);
-        dispatch(setLastLaneStatus(newStatus))
+        setLaneStatus((prev) =>
+            prev && prev.name === name && prev.status === newState
+                ? prev
+                : {id: -1, name, status: newState});
     }
 
     return (
         <>
             {laneStatus && (
-                <LaneItem key={laneStatus.id} id={laneStatus.id} name={laneStatus.name} status={laneStatus.status}/>
+                <LaneItem key={laneStatus.name} name={laneStatus.name} status={laneStatus.status}/>
             )}
         </>
     );

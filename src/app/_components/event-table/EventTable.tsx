@@ -63,6 +63,7 @@ import { resolveLaneSelection } from "@/lib/data/oscar/streams/LaneStreamRegistr
 import { useLaneStreams } from "@/lib/data/oscar/streams/useLaneStreams";
 import { GridColumnVisibilityModel } from "@mui/x-data-grid";
 import * as React from "react";
+import {countRender} from "@/app/_components/dev/perfProbe";
 
 
 /** Adjudication window starts are floored to this so paging doesn't refetch for a few extra seconds of history. */
@@ -71,6 +72,80 @@ const ADJ_WINDOW_QUANTUM_MS = 60 * 60 * 1000;
 // Backoff for recovering a live row's occupancy observation id. Spans ~10s,
 // comfortably inside the time an OCR result takes to come back anyway.
 const OBS_ID_BACKFILL_DELAYS_MS = [400, 1200, 3000, 6000];
+
+// Static grid props, hoisted so their identity never changes. `sx` in
+// particular is re-serialized by emotion whenever its reference does, and this
+// block used to be a literal in the render body — recreated on every live row.
+const GRID_SLOTS = {toolbar: CustomToolbar, columnsManagement: EventTableColumnsPanel};
+
+const GRID_INITIAL_STATE = {
+    sorting: {
+        sortModel: [{field: 'startTime', sort: 'desc'}] as any,
+    },
+};
+
+const GRID_AUTOSIZE_OPTIONS = {
+    expand: true,
+    includeOutliers: true,
+    includeHeaders: false,
+};
+
+const GRID_SX = {
+    [`.${gridClasses.row}.selected-row`]: {
+        backgroundColor: 'rgba(33, 150, 243, 0.5)',
+    },
+    [`.${gridClasses.cell}.highlightGamma`]: {
+        backgroundColor: "error.main",
+        color: "error.contrastText",
+    },
+    [`.${gridClasses.cell}.highlightNeutron`]: {
+        backgroundColor: "info.main",
+        color: "info.contrastText",
+    },
+    [`.${gridClasses.cell}.highlightGammaNeutron`]: {
+        backgroundColor: "secondary.main",
+        color: "secondary.contrastText",
+    },
+    [`.${gridClasses.cell}.highlightReal`]: {
+        color: "error.dark",
+    },
+    [`.${gridClasses.cell}.highlightInnocent`]: {
+        color: "primary.dark",
+    },
+    [`.${gridClasses.cell}.highlightFalse`]: {
+        color: "success.dark",
+    },
+    [`.${gridClasses.cell}.highlightOther`]: {
+        color: "text.primary",
+    },
+    border: "none",
+};
+
+/** Pure function of the cell — no component state, so it lives out here. */
+const getCellClassName = (params: GridCellParams<any, any, string>) => {
+    if (params.field === "adjudicationGroup") {
+        if (params.value === "Real Alarm") return "highlightReal";
+        if (params.value === "Innocent Alarm") return "highlightInnocent";
+        if (params.value === "False Alarm") return "highlightFalse";
+        if (params.value === "Test/Maintenance" || params.value === "Tamper/Fault" || params.value === "Other") return "highlightOther";
+        return '';
+    }
+    if (params.value === "Gamma")
+        return "highlightGamma";
+    else if (params.value === "Neutron")
+        return "highlightNeutron";
+    else if (params.value === "Gamma & Neutron" || (params.value !== "None" && params.field === "status"))
+        return "highlightGammaNeutron";
+    else if (params.formattedValue === 'Code 1: Contraband Found' || params.formattedValue === 'Code 2: Other' || params.formattedValue === 'Code 3: Medical Isotope Found')
+        return "highlightReal";
+    else if (params.formattedValue === 'Code 4: Norm Found' || params.formattedValue === 'Code 5: Declared Shipment of Radioactive Material' || params.formattedValue === 'Code 6: Physical Inspection Negative')
+        return "highlightInnocent";
+    else if (params.formattedValue === 'Code 7: RIID/ASP Indicates Background Only' || params.formattedValue === 'Code 8: Other' || params.formattedValue === 'Code 9: Authorized Test, Maintenance, or Training Activity')
+        return "highlightFalse";
+    else if (params.formattedValue === 'Code 10: Unauthorized Activity' || params.formattedValue === 'Code 11: Other')
+        return "highlightOther";
+    return '';
+};
 
 interface TableProps {
     tableMode: "eventlog" | "alarmtable" | "lanelog";
@@ -122,6 +197,7 @@ export default function EventTable({
                                        onColumnSettingsChange,
                                    }: TableProps) {
 
+    countRender('EventTable');
     const nodes = useSelector(selectNodes);
     const selectedRowId = useSelector(selectSelectedRowId);
     const [loading, setLoading] = useState(false);
@@ -252,7 +328,19 @@ export default function EventTable({
     const backfilledRowsRef = useRef<Set<number>>(new Set());
     const mountedRef = useRef(true);
     useEffect(() => () => { mountedRef.current = false; }, []);
-    const locale = navigator.language || 'en-US';
+    const locale = useMemo(() => navigator.language || 'en-US', []);
+
+    // Read through refs inside getActions so the memoized column defs below
+    // don't have to depend on them: EventTableWidget rebuilds extraRowActions
+    // as an inline arrow on every render, which would defeat the memo entirely.
+    // getActions runs at row-render time, so the ref always holds the current
+    // closure.
+    const extraRowActionsRef = useRef(extraRowActions);
+    extraRowActionsRef.current = extraRowActions;
+
+    const handleEventPreview = useCallback(() => {
+        router.push("/event-details");
+    }, [router]);
 
     // minWidth is max(what the header needs, what a typical value needs), plus
     // ~22px of cell chrome — all measured in the browser, not estimated. Header
@@ -262,7 +350,14 @@ export default function EventTable({
     // "Secondary Inspection") give ~270px back across the table. The columns
     // still pinned wide — the timestamps, Status, Vehicle ID — are bound by
     // their VALUES, where wrapping the header buys nothing.
-    const columns: GridColDef<EventTableData>[] = [
+    //
+    // MEMOIZED ON PURPOSE. MUI X rebuilds its entire internal column state
+    // whenever `props.columns` changes identity, and this array used to be a
+    // bare literal — i.e. a full column-state recompute on every render, of
+    // which the dashboard was producing dozens a second. It is also why a
+    // dragged width had to be lifted into localColumnWidths to survive at all
+    // (see the comment on that state).
+    const columns: GridColDef<EventTableData>[] = useMemo(() => [
         {
             field: 'laneId',
             headerName: t('laneId'),
@@ -416,7 +511,7 @@ export default function EventTable({
             minWidth: extraRowActions ? 90 : 50,
             flex: 0.5,
             getActions: (params) => [
-                ...(extraRowActions ? (extraRowActions(params.row) as any[]) : []),
+                ...(extraRowActionsRef.current ? (extraRowActionsRef.current(params.row) as any[]) : []),
                 selectionModel.includes(params.row.id) ? (
                     <GridActionsCellItem
                         key="details"
@@ -428,20 +523,25 @@ export default function EventTable({
                 ) : <></>,
             ],
         },
-    ];
-
-    // A stored width only takes effect with flex cleared: hydrateColumnsWidth
-    // hands any column with flex > 0 its share of the free space and never
-    // looks at width. minWidth still applies, which is what stops a drag from
-    // shrinking a column past the point of being readable.
-    const withStoredWidth = (col: GridColDef<EventTableData>): GridColDef<EventTableData> => {
-        const width = columnWidths[col.field];
-        return width ? {...col, width, flex: undefined} : col;
-    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    ], [t, locale, viewAdjudicated, selectionModel, extraRowActions !== undefined, handleEventPreview]);
 
     // Widget-configured column order: settings order first, remaining base
     // columns (e.g. the actions column) keep their relative order at the end.
-    const orderedColumns: GridColDef<EventTableData>[] = (() => {
+    //
+    // Memoized for the same reason as `columns` — this is what actually reaches
+    // the grid, so an unstable identity here costs the same column-state
+    // rebuild even if `columns` itself is stable.
+    const orderedColumns: GridColDef<EventTableData>[] = useMemo(() => {
+        // A stored width only takes effect with flex cleared: hydrateColumnsWidth
+        // hands any column with flex > 0 its share of the free space and never
+        // looks at width. minWidth still applies, which is what stops a drag from
+        // shrinking a column past the point of being readable.
+        const withStoredWidth = (col: GridColDef<EventTableData>): GridColDef<EventTableData> => {
+            const width = columnWidths[col.field];
+            return width ? {...col, width, flex: undefined} : col;
+        };
+
         if (!columnSettings || columnSettings.length === 0) return columns.map(withStoredWidth);
         const byField = new Map(columns.map((c) => [c.field, c]));
         const ordered: GridColDef<EventTableData>[] = [];
@@ -456,7 +556,8 @@ export default function EventTable({
             if (byField.has(col.field)) ordered.push(col);
         }
         return ordered.map(withStoredWidth);
-    })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [columns, columnSettingsKey, columnWidths]);
 
     const handlePaginationChange = useCallback((model: { page: number; pageSize: number }) => {
         if (model.page === 0 && paginationModel.page !== 0) {
@@ -474,8 +575,12 @@ export default function EventTable({
             const entry = stableLaneMap.get(currentLane);
             if (!entry) return datastreamIds;
 
+            // Must be the empty ARRAY, not undefined: every caller goes
+            // straight to `datastreamIds.length`, so a bare `return` here threw
+            // a TypeError for any lane-log table (StatusTableWidget) the moment
+            // a second node was registered.
             if (entry.parentNode.id !== node.id)
-                return;
+                return datastreamIds;
 
 
             const occStreams = entry.datastreams.filter((ds: typeof DataStream) => isOccupancyDataStream(ds));
@@ -910,10 +1015,6 @@ export default function EventTable({
         setRowCount(totalObservations);
     }, [totalObservations]);
 
-    const handleEventPreview = () => {
-        router.push("/event-details");
-    };
-
     const handleRowDoubleClick = (params: GridRowParams) => {
         const selectedRow = params.row as EventTableData;
         if (!selectedRow) return;
@@ -992,6 +1093,10 @@ export default function EventTable({
         else
             setLocalColumnWidths((prev) => ({...prev, [field]: width}));
     };
+
+    const getRowClassName = useCallback(
+        (params: GridRowParams) => (selectionModel.includes(params.row.id) ? 'selected-row' : ''),
+        [selectionModel]);
 
     const handleAlarmFilterChange = useCallback((next: AlarmFilterState) => {
         setAlarmFilter(next);
@@ -1280,7 +1385,7 @@ export default function EventTable({
                 onRowDoubleClick={handleRowDoubleClick}
                 rowSelectionModel={selectionModel}
                 pageSizeOptions={[15]}
-                slots={{ toolbar: CustomToolbar, columnsManagement: EventTableColumnsPanel }}
+                slots={GRID_SLOTS}
                 slotProps={{
                     panel: {
                         // Room for the drag handle and reorder arrows the panel
@@ -1301,73 +1406,11 @@ export default function EventTable({
                         adjudicateAllBusy: bulkBusy
                     } : {}
                 }}
-                initialState={{
-                    sorting: {
-                        sortModel: [{field: 'startTime', sort: 'desc'}]
-                    },
-                }}
-                autosizeOptions={{
-                    expand: true,
-                    includeOutliers: true,
-                    includeHeaders: false,
-                }}
-                getCellClassName={(params: GridCellParams<any, any, string>) => {
-                    if (params.field === "adjudicationGroup") {
-                        if (params.value === "Real Alarm") return "highlightReal";
-                        if (params.value === "Innocent Alarm") return "highlightInnocent";
-                        if (params.value === "False Alarm") return "highlightFalse";
-                        if (params.value === "Test/Maintenance" || params.value === "Tamper/Fault" || params.value === "Other") return "highlightOther";
-                        return '';
-                    }
-                    if (params.value === "Gamma")
-                        return "highlightGamma";
-                    else if (params.value === "Neutron")
-                        return "highlightNeutron";
-                    else if (params.value === "Gamma & Neutron" || (params.value !== "None" && params.field === "status"))
-                        return "highlightGammaNeutron";
-                    else if (params.formattedValue === 'Code 1: Contraband Found' || params.formattedValue === 'Code 2: Other' || params.formattedValue === 'Code 3: Medical Isotope Found')
-                        return "highlightReal";
-                    else if (params.formattedValue === 'Code 4: Norm Found' || params.formattedValue === 'Code 5: Declared Shipment of Radioactive Material' || params.formattedValue === 'Code 6: Physical Inspection Negative')
-                        return "highlightInnocent";
-                    else if (params.formattedValue === 'Code 7: RIID/ASP Indicates Background Only' || params.formattedValue === 'Code 8: Other' || params.formattedValue === 'Code 9: Authorized Test, Maintenance, or Training Activity')
-                        return "highlightFalse";
-                    else if (params.formattedValue === 'Code 10: Unauthorized Activity' || params.formattedValue === 'Code 11: Other')
-                        return "highlightOther";
-                    return '';
-                }}
-                getRowClassName={(params) =>
-                    selectionModel.includes(params.row.id) ? 'selected-row' : ''
-                }
-                sx={{
-                    [`.${gridClasses.row}.selected-row`]: {
-                        backgroundColor: 'rgba(33, 150, 243, 0.5)',
-                    },
-                    [`.${gridClasses.cell}.highlightGamma`]: {
-                        backgroundColor: "error.main",
-                        color: "error.contrastText",
-                    },
-                    [`.${gridClasses.cell}.highlightNeutron`]: {
-                        backgroundColor: "info.main",
-                        color: "info.contrastText",
-                    },
-                    [`.${gridClasses.cell}.highlightGammaNeutron`]: {
-                        backgroundColor: "secondary.main",
-                        color: "secondary.contrastText",
-                    },
-                    [`.${gridClasses.cell}.highlightReal`]: {
-                        color: "error.dark",
-                    },
-                    [`.${gridClasses.cell}.highlightInnocent`]: {
-                        color: "primary.dark",
-                    },
-                    [`.${gridClasses.cell}.highlightFalse`]: {
-                        color: "success.dark",
-                    },
-                    [`.${gridClasses.cell}.highlightOther`]: {
-                        color: "text.primary",
-                    },
-                    border: "none",
-                }}
+                initialState={GRID_INITIAL_STATE}
+                autosizeOptions={GRID_AUTOSIZE_OPTIONS}
+                getCellClassName={getCellClassName}
+                getRowClassName={getRowClassName}
+                sx={GRID_SX}
             />
         </Box>
         <Dialog open={bulkConfirmOpen} onClose={() => !bulkBusy && setBulkConfirmOpen(false)} maxWidth="xs" fullWidth>
