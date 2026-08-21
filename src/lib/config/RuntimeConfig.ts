@@ -37,6 +37,38 @@ export interface OscarRuntimeConfig {
 
 const CONFIG_FILE = "oscar-config.json";
 
+/**
+ * True when the page is being served by the desktop client's local server, which marks
+ * every document it serves. See injectDesktopMarker in electron/proxy.js.
+ */
+export function isDesktopClient(): boolean {
+    return typeof window !== "undefined" && (window as any).__OSCAR_DESKTOP__ === true;
+}
+
+/**
+ * Where a node's requests should actually be sent.
+ *
+ * In a browser this is the node itself. In the desktop client it is the client's own
+ * origin, with the node's id in the path: a browser cannot put credentials on a
+ * WebSocket handshake, so live data can only authenticate if it goes through the local
+ * server, which attaches them on the way out. The node's real address is registered
+ * separately - see registerUpstreams - and never used as a transport address here.
+ *
+ * Returning the node's own address in the browser case keeps a node-served deployment
+ * behaving exactly as it did.
+ */
+export function nodeTransport(
+    node: { id: string; address: string; port: number; isSecure?: boolean }
+): { host: string; tls: boolean } {
+    if (isDesktopClient()) {
+        return {
+            host: `${window.location.host}/__oscar/u/${encodeURIComponent(node.id)}`,
+            tls: window.location.protocol === "https:",
+        };
+    }
+    return { host: `${node.address}:${node.port}`, tls: node.isSecure ?? false };
+}
+
 let cached: Promise<OscarRuntimeConfig | null> | null = null;
 
 /**
@@ -78,6 +110,62 @@ export function loadRuntimeConfig(): Promise<OscarRuntimeConfig | null> {
     })();
 
     return cached;
+}
+
+/**
+ * A file-server (buckets) url for this node, routed the same way as everything else.
+ *
+ * This one matters for a reason the REST calls do not share: video, images and report
+ * downloads are fetched by the element itself - <video>, <source>, HLS, <img> - and a
+ * media element cannot be given an Authorization header. Addressed straight at the node
+ * they arrive unauthenticated and come back 401, which is why past-alarm clips stayed
+ * blank in the desktop client while live streams played. Going through the local server
+ * lets it attach the credentials, exactly as it does for the WebSocket handshake.
+ *
+ * Takes any node-shaped object rather than a Node instance: several callers receive a
+ * plain INode out of Redux or props.
+ */
+export function nodeFileServerUrl(
+    node: { id: string; address: string; port: number; isSecure?: boolean; oshPathRoot?: string; bucketsEndpoint?: string },
+    path: string = ""
+): string {
+    const transport = nodeTransport(node);
+    const protocol = transport.tls ? "https" : "http";
+    const root = node.oshPathRoot ?? "/sensorhub";
+    const buckets = node.bucketsEndpoint ?? "/buckets";
+    return `${protocol}://${transport.host}${root}${buckets}/${path}`;
+}
+
+/**
+ * Tells the desktop client which node each id in the path refers to.
+ *
+ * Must run before any data request: the local server has no other way to learn a node's
+ * address or credentials, and a WebSocket handshake cannot carry them. A no-op in the
+ * browser, where requests go to the node directly and carry their own Authorization.
+ */
+export async function registerUpstreams(
+    nodes: Array<{ id: string; address: string; port: number; auth?: { username: string; password: string } | null }>
+): Promise<void> {
+    if (!isDesktopClient()) return;
+
+    try {
+        await fetch("/__oscar/upstreams", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(nodes.map((n) => ({
+                id: n.id,
+                address: n.address,
+                port: n.port,
+                auth: n.auth?.username
+                    ? { username: n.auth.username, password: n.auth.password ?? "" }
+                    : null,
+            }))),
+        });
+    } catch (err) {
+        // The next render registers again; failing loudly here would only replace live
+        // data with a blank page.
+        console.warn(`[config] could not register upstreams: ${(err as Error).message}`);
+    }
 }
 
 /** Test seam: drops the memoized result so the next call re-reads the file. */

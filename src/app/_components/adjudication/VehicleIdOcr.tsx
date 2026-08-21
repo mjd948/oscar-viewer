@@ -6,6 +6,8 @@
  */
 
 import React, {useCallback, useContext, useEffect, useRef, useState} from "react";
+import {useSelector} from "react-redux";
+import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 import {Avatar, Box, Chip, Stack, Tooltip, Typography} from "@mui/material";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import DirectionsBoatIcon from "@mui/icons-material/DirectionsBoat";
@@ -20,6 +22,7 @@ import {EventType} from "osh-js/source/core/event/EventType";
 import VehicleOcrResult, {dedupeOcrResults, IVehicleOcrResult} from "@/lib/data/oscar/adjudication/VehicleOcr";
 import {isValidIso6346} from "@/lib/data/oscar/adjudication/Iso6346";
 import {useLanguage} from "@/app/contexts/LanguageContext";
+import {nodeFileServerUrl} from "@/lib/config/RuntimeConfig";
 
 // OCR publishes a few seconds after the occupancy closes, so bracket the event
 // instead of scanning the datastream: vehicleOcr grows without bound, and an
@@ -65,6 +68,11 @@ export default function VehicleIdOcr(props: {
     occupancyObsIdRef.current = occupancyObsId;
     const subscribedSourceRef = useRef<any>(null);
 
+    // Re-runs everything below once the lane map lands. Against a remote node it
+    // regularly arrives after this mounts, and laneMapRef is a ref: without this the
+    // panel bails once and stays blank until the alarm is reopened.
+    const laneMap = useSelector(selectLaneMap);
+
     const getLaneEntry = useCallback((): LaneMapEntry | null => {
         if (!props.event?.laneId || !laneMapRef.current) return null;
         return laneMapRef.current.get(props.event.laneId) ?? null;
@@ -95,7 +103,7 @@ export default function VehicleIdOcr(props: {
         return () => {
             cancelled = true;
         };
-    }, [props.event]);
+    }, [props.event, laneMap]);
 
     const fetchData = useCallback(async (cancel: { done: boolean }): Promise<boolean> => {
         const laneEntry = getLaneEntry();
@@ -123,7 +131,7 @@ export default function VehicleIdOcr(props: {
         const forThisOccupancy = collected.filter(result => result?.occupancyObsId === occupancyObsId);
         setOcrLog(forThisOccupancy);
         return forThisOccupancy.length > 0;
-    }, [props.event, occupancyObsId]);
+    }, [props.event, occupancyObsId, laneMap]);
 
     useEffect(() => {
         // results are per-occupancy; drop the previous event's before refetching
@@ -189,7 +197,7 @@ export default function VehicleIdOcr(props: {
         } catch (err) {
             console.error("Error connecting vehicleOcr source:", err);
         }
-    }, [props.event, occupancyObsId]);
+    }, [props.event, occupancyObsId, laneMap]);
 
     const results = dedupeOcrResults(
         [...liveResults, ...ocrLog].filter(result => result?.occupancyObsId === occupancyObsId));
@@ -204,7 +212,7 @@ export default function VehicleIdOcr(props: {
     const laneEntry = getLaneEntry();
     const node = laneEntry?.parentNode;
     const bucketUrl = (path: string) => node && path
-        ? `${node.isSecure ? "https" : "http"}://${node.address}:${node.port}${node.oshPathRoot}/buckets/${path}`
+        ? nodeFileServerUrl(node, path)
         : undefined;
 
     return (

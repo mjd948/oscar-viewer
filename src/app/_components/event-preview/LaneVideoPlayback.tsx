@@ -9,6 +9,7 @@ import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
 import '../../../Styles.css';
 import CircularProgress from "@mui/material/CircularProgress";
+import {nodeFileServerUrl} from "@/lib/config/RuntimeConfig";
 
 
 export class LaneVideoPlaybackProps {
@@ -29,7 +30,6 @@ export default function LaneVideoPlayback({selectedNode, videos, modeType, start
     const [videoDuration, setVideoDuration] = useState<number>(0);
     const [isUpdatingFromSlider, setIsUpdatingFromSlider] = useState(false);
     const [selVideoIdx, setSelVidIdx] = useState<number>(0);
-    const tls = selectedNode ? (selectedNode.isSecure ? 'https' : 'http') : '';
 
 
     useEffect(() => {
@@ -170,7 +170,7 @@ export default function LaneVideoPlayback({selectedNode, videos, modeType, start
                                     muted
                                     playsInline
                                 >
-                                    <source src={`${tls}://${selectedNode.address}:${selectedNode.port}${selectedNode.oshPathRoot}/buckets/${video.trim()}`} type="video/mp4" />
+                                    <source src={nodeFileServerUrl(selectedNode, video.trim())} type="video/mp4" />
                                     Your browser does not support the video tag.
                                 </video>
                             );

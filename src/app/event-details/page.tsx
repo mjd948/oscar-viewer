@@ -5,6 +5,7 @@ import React, {useCallback, useContext, useEffect, useRef, useState} from "react
 import BackButton from "../_components/BackButton";
 import DataRow from "../_components/event-details/DataRow";
 import {useSelector} from "react-redux";
+import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 import ConSysApi from "osh-js/source/core/datasource/consysapi/ConSysApi.datasource";
 import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import {selectEventPreview} from "@/lib/state/EventPreviewSlice";
@@ -37,6 +38,12 @@ export default function EventDetailsPage() {
     const docTitle = eventPreview.eventData ? `eventdetails-${eventPreview.eventData.laneId}-${eventPreview.eventData.occupancyObsId}-${eventPreview.eventData.startTime}-${eventPreview.eventData.endTime}` : 'eventdetails';
 
     const { t } = useLanguage();
+    // The lane map arrives asynchronously, and against a remote node it routinely lands
+    // after this mounts. laneMapRef is a ref and cannot trigger a re-render, so without
+    // this selector an early mount stays empty for good - which is why an alarm opened
+    // straight after launch showed no video or analysis until the page was reopened.
+    const laneMap = useSelector(selectLaneMap);
+
 
     const collectDataSources = useCallback(async() => {
         if(!eventPreview.eventData?.laneId || !laneMapRef.current) return;
@@ -68,7 +75,7 @@ export default function EventDetailsPage() {
 
         setDatasourcesReady(true);
 
-    }, [eventPreview, laneMapRef]);
+    }, [eventPreview, laneMapRef, laneMap]);
 
 
     const checkForSpeed = useCallback(async () => {
@@ -92,7 +99,7 @@ export default function EventDetailsPage() {
         } catch (err) {
             console.warn("Could not fetch speed:", err);
         }
-    }, [eventPreview, laneMapRef]);
+    }, [eventPreview, laneMapRef, laneMap]);
 
 
     useEffect(() => {
@@ -103,14 +110,14 @@ export default function EventDetailsPage() {
         if(laneMapRef.current && eventPreview) {
             callCollectDatasources();
         }
-    }, [eventPreview, laneMapRef.current]);
+    }, [eventPreview, laneMapRef.current, laneMap]);
 
 
     useEffect(() => {
         if (laneMapRef.current && eventPreview.eventData) {
             checkForSpeed();
         }
-    }, [eventPreview, laneMapRef.current]);
+    }, [eventPreview, laneMapRef.current, laneMap]);
 
 
     useEffect(() => {

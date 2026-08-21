@@ -10,6 +10,8 @@ import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import N42ChartPlayback from "@/app/_components/n42/N42ChartPlayback";
 import {randomUUID} from "osh-js/source/core/utils/Utils";
 import {useLanguage} from "@/app/contexts/LanguageContext";
+import {useSelector} from "react-redux";
+import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 
 export interface N42Report {
     samplingTime: string;
@@ -53,6 +55,12 @@ export default function N42Detail(props: { event: EventTableData }) {
     const targetOccupancyObsId = props.event.occupancyObsId;
     const currentLaneId = props.event.laneId;
 
+    // The lane map is populated asynchronously, and over a network to a remote node it
+    // routinely arrives after this component has mounted. laneMapRef is a ref, so it
+    // cannot wake anything up; this selector is what re-runs the effects below once the
+    // lanes are actually there.
+    const laneMap = useSelector(selectLaneMap);
+
     const fetchN42 = useCallback(async() => {
         // Reset on event change so we don't show stale data from another event.
         setFileDataMap(new Map());
@@ -63,7 +71,11 @@ export default function N42Detail(props: { event: EventTableData }) {
             return;
         }
 
-        const currLaneEntry: LaneMapEntry = laneMapRef.current.get(currentLaneId);
+        const currLaneEntry: LaneMapEntry = laneMapRef.current?.get(currentLaneId);
+        if (!currLaneEntry) {
+            console.debug("[N42Detail] skipping fetch: lane entry not ready for", currentLaneId);
+            return;
+        }
 
         const n42Stream = currLaneEntry.findDataStreamByObsProperty(N42_REPORT_DEF);
         if (!n42Stream) {
@@ -107,7 +119,7 @@ export default function N42Detail(props: { event: EventTableData }) {
         if (matched.size > 0) {
             setFileDataMap(matched);
         }
-    }, [targetOccupancyObsId, currentLaneId, laneMapRef]);
+    }, [targetOccupancyObsId, currentLaneId, laneMapRef, laneMap]);
 
     useEffect(() => {
         if (props.event) fetchN42();
@@ -119,7 +131,11 @@ export default function N42Detail(props: { event: EventTableData }) {
             return;
         }
 
-        const currLaneEntry: LaneMapEntry = laneMapRef.current.get(currentLaneId);
+        const currLaneEntry: LaneMapEntry = laneMapRef.current?.get(currentLaneId);
+        if (!currLaneEntry) {
+            console.debug("[N42Detail] skipping live subscribe: lane entry not ready for", currentLaneId);
+            return;
+        }
 
         const n42Stream = currLaneEntry.findDataStreamByObsProperty(N42_REPORT_DEF);
         if (!n42Stream) {
@@ -171,7 +187,7 @@ export default function N42Detail(props: { event: EventTableData }) {
             console.error("Error connecting n42 source:", err);
         }
 
-    }, [targetOccupancyObsId, currentLaneId, laneMapRef]);
+    }, [targetOccupancyObsId, currentLaneId, laneMapRef, laneMap]);
 
     const fileEntries = Array.from(fileDataMap.values());
 

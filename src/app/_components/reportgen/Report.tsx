@@ -6,6 +6,7 @@ import {
     Stack,
     Typography
 } from "@mui/material";
+import {nodeTransport, nodeFileServerUrl} from "@/lib/config/RuntimeConfig";
 import ReportTypeSelect from "@/app/_components/reportgen/ReportTypeSelector";
 import {Download} from "@mui/icons-material";
 import React, {useState} from "react";
@@ -100,13 +101,16 @@ export default function ReportGeneratorView(){
                     isStreamingStatus = true;
                     setCommandStatus('PENDING');
 
+                    // Same rule as every other stream: go through the node's own endpoint
+                    // helper, which routes via the desktop client's local server when there
+                    // is one. A ws:// handshake straight to the node cannot authenticate.
                     const networkProperties = {
-                        endpointUrl: `${selectedNode.address}:${selectedNode.port}${selectedNode.oshPathRoot}${selectedNode.csAPIEndpoint}`,
-                        tls: selectedNode.isSecure,
+                        endpointUrl: selectedNode.getConnectedSystemsEndpoint(true),
+                        tls: nodeTransport(selectedNode).tls,
                         streamProtocol: 'ws',
                         connectorOpts: {
-                            username: selectedNode.auth.username,
-                            password: selectedNode.auth.password
+                            username: selectedNode.auth?.username,
+                            password: selectedNode.auth?.password
                         }
                     };
 
@@ -130,9 +134,8 @@ export default function ReportGeneratorView(){
                             if (statusCode === 'ACCEPTED') {
                                 const reportPath = message?.results?.[0]?.data?.reportPath;
                                 if (reportPath) {
-                                    const isTls = selectedNode.isSecure ? 'https://' : 'http://';
                                     setGeneratedURL(
-                                        `${isTls}${selectedNode.address}:${selectedNode.port}${selectedNode.oshPathRoot}/buckets/${reportPath}`
+                                        nodeFileServerUrl(selectedNode, reportPath)
                                     );
                                 }
                                 setSnackMessage("Report created successfully");
@@ -160,9 +163,8 @@ export default function ReportGeneratorView(){
                     return;
                 }
                 else if (json.statusCode === "ACCEPTED") {
-                    const isTls = selectedNode.isSecure ? 'https://' : 'http://';
                     setGeneratedURL(
-                        `${isTls}${selectedNode.address}:${selectedNode.port}${selectedNode.oshPathRoot}/buckets/${json.results[0].data.reportPath}`
+                        nodeFileServerUrl(selectedNode, json.results[0].data.reportPath)
                     );
                     setSnackMessage("Report created successfully");
                     setSeverity("success");

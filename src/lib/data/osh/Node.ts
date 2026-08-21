@@ -14,6 +14,7 @@ import SystemFilter from "osh-js/source/core/consysapi/system/SystemFilter.js";
 import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
 import ControlStreams from "osh-js/source/core/consysapi/controlstream/ControlStreams";
 import { hashString } from "@/app/utils/Utils";
+import { nodeTransport } from "@/lib/config/RuntimeConfig";
 import {LatLngExpression} from "leaflet";
 import ControlStreamFilter from "osh-js/source/core/consysapi/controlstream/ControlStreamFilter";
 import DataStream from "osh-js/source/core/consysapi/datastream/DataStream.js";
@@ -39,6 +40,8 @@ export interface INode {
     upperRightBound: LatLngExpression;
 
     getConnectedSystemsEndpoint(noProtocolPrefix: boolean): string,
+
+    getMqttEndpoint(): string,
 
     getBasicAuthHeader(): any,
 
@@ -129,23 +132,32 @@ export class Node implements INode {
         this.isSecure = options.isSecure || false;
         this.isDefaultNode = options.isDefaultNode || false;
 
+        // A node with no credentials is an ordinary situation - the operator has not
+        // signed in yet - and used to throw here, which left the app with no node at all
+        // and no visible reason why.
+        const credentials = this.auth ?? {username: undefined, password: undefined};
+
+        // Transport address, which is NOT the node's address in the desktop client: see
+        // nodeTransport. address/port stay the node's own, since they are what the user
+        // typed, what is shown in the UI, and what gets registered with the local server.
+        const transport = nodeTransport(this);
 
         let mqttOpts = {
             shared: true,
             prefix: this.csAPIEndpoint,
-            endpointUrl: `${this.address}:${this.port}${this.oshPathRoot}`,
-            username: this.auth.username,
-            password: this.auth.password,
+            endpointUrl: `${transport.host}${this.oshPathRoot}`,   // == getMqttEndpoint()
+            username: credentials.username,
+            password: credentials.password,
         }
 
         let networkProperties = {
-            endpointUrl: `${this.address}:${this.port}${this.oshPathRoot}${this.csAPIEndpoint}`,
-            tls: this.isSecure,
+            endpointUrl: `${transport.host}${this.oshPathRoot}${this.csAPIEndpoint}`,
+            tls: transport.tls,
             streamProtocol: "mqtt",
             mqttOpts: mqttOpts,
             connectorOpts: {
-                username: this.auth.username,
-                password: this.auth.password
+                username: credentials.username,
+                password: credentials.password
             }
         }
 
@@ -189,20 +201,35 @@ export class Node implements INode {
         return this.dataStreamsApi;
     }
 
+    // The host and path an MQTT-over-WebSocket connection should open, with no protocol
+    // and no /api suffix. Callers used to rebuild this by splitting the REST endpoint on
+    // "/" and keeping the first two segments, which silently assumed the url was exactly
+    // host:port/sensorhub/api - it stopped being true the moment a routing prefix was
+    // added, and the only symptom was that live data quietly stopped arriving.
+    getMqttEndpoint(): string {
+        return `${nodeTransport(this).host}${this.oshPathRoot}`;
+    }
+
     getConnectedSystemsEndpoint(noProtocolPrefix: boolean = false) {
-        let protocol = this.isSecure ? 'https' : 'http';
-        return noProtocolPrefix ? `${this.address}:${this.port}${this.oshPathRoot}${this.csAPIEndpoint}`
-            : `${protocol}://${this.address}:${this.port}${this.oshPathRoot}${this.csAPIEndpoint}`;
+        const transport = nodeTransport(this);
+        let protocol = transport.tls ? 'https' : 'http';
+        return noProtocolPrefix ? `${transport.host}${this.oshPathRoot}${this.csAPIEndpoint}`
+            : `${protocol}://${transport.host}${this.oshPathRoot}${this.csAPIEndpoint}`;
     }
 
     getFileServerEndpoint(noProtocolPrefix: boolean = false) {
-        let protocol = this.isSecure ? 'https' : 'http';
-        return noProtocolPrefix ? `${this.address}:${this.port}${this.oshPathRoot}/buckets`
-            : `${protocol}://${this.address}:${this.port}${this.oshPathRoot}/buckets`;
+        const transport = nodeTransport(this);
+        let protocol = transport.tls ? 'https' : 'http';
+        return noProtocolPrefix ? `${transport.host}${this.oshPathRoot}/buckets`
+            : `${protocol}://${transport.host}${this.oshPathRoot}/buckets`;
     }
 
+    // Returns no header at all when the node has no credentials, rather than sending
+    // "Basic dW5kZWZpbmVkOnVuZGVmaW5lZA==". The node answers 401 either way, but the app
+    // routes to the Servers page on a clean 401 instead of appearing to have signed in.
     getBasicAuthHeader() {
-        const encoded = btoa(`${this.auth.username}:${this.auth.password}`);
+        if (!this.auth?.username) return {};
+        const encoded = btoa(`${this.auth.username}:${this.auth.password ?? ''}`);
         return {"Authorization": `Basic ${encoded}`};
     }
 

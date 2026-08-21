@@ -21,6 +21,7 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import React, {useCallback, useContext, useEffect, useRef, useState} from "react";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {useSelector} from "react-redux";
+import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 import {
     selectEventPreview,
     setEventPreview,
@@ -57,6 +58,12 @@ import {computeAutofill, IVehicleOcrResult} from "@/lib/data/oscar/adjudication/
 export function EventPreview() {
     const { isDesktop } = useBreakpoint();
     const { t } = useLanguage();
+    // The lane map arrives asynchronously, and against a remote node it routinely lands
+    // after this mounts. laneMapRef is a ref and cannot trigger a re-render, so without
+    // this selector an early mount stays empty for good - which is why an alarm opened
+    // straight after launch showed no video or analysis until the page was reopened.
+    const laneMap = useSelector(selectLaneMap);
+
 
     const dispatch = useAppDispatch();
     const router = useRouter();
@@ -304,7 +311,7 @@ export function EventPreview() {
         setThresholdDatasources(updatedThreshold);
 
         setDatasourcesReady(true);
-    }, [eventPreview, laneMapRef]);
+    }, [eventPreview, laneMapRef, laneMap]);
 
 
     async function callCollectDataSources(){

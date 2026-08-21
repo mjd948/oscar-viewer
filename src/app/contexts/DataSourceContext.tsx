@@ -8,7 +8,7 @@ import {setLaneMap} from "@/lib/state/OSCARLaneSlice";
 import {AppDispatch, RootState} from "@/lib/state/Store";
 import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import {INode, Node, NodeOptions} from "@/lib/data/osh/Node";
-import {loadRuntimeConfig} from "@/lib/config/RuntimeConfig";
+import {loadRuntimeConfig, isDesktopClient, registerUpstreams} from "@/lib/config/RuntimeConfig";
 
 
 
@@ -42,6 +42,7 @@ export default function DataSourceProvider({children}: { children: ReactNode }) 
 
         bootstrapping.current = true;
         Promise.resolve(dispatch(initializeDefaultNode()))
+            .catch((err) => console.error("[init] could not seed the default node:", err))
             .finally(() => { bootstrapping.current = false; });
     }, [nodes]);
 
@@ -105,6 +106,9 @@ export default function DataSourceProvider({children}: { children: ReactNode }) 
     useEffect(() => {
         const init = async () => {
             await InitializeApplication();
+            // Before any fetch: in the desktop client the local server routes by node id
+            // and supplies the credentials, and it only knows the table once told.
+            await registerUpstreams(nodes as any);
             await testSysFetch();
         }
         init();
@@ -133,6 +137,12 @@ export default function DataSourceProvider({children}: { children: ReactNode }) 
 export const initializeDefaultNode = () => async (dispatch: AppDispatch) => {
     const runtime = await loadRuntimeConfig();
     const configured = runtime?.node;
+
+    // In the desktop client the window.location fallback below would name this app's own
+    // local server, which it would then be asked to forward to - itself. With nothing
+    // configured there is no node to guess at, so leave the list empty and let the
+    // Servers page take the address.
+    if (!configured && isDesktopClient()) return;
 
     const initialNodeOpts: NodeOptions = configured
         ? {

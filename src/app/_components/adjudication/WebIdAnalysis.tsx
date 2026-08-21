@@ -1,6 +1,8 @@
 "use client";
 
 import React, {useCallback, useContext, useEffect, useRef, useState} from "react";
+import {useSelector} from "react-redux";
+import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 import {EventTableData} from "@/lib/data/oscar/TableHelpers";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {DataGrid, GridColDef} from "@mui/x-data-grid";
@@ -50,6 +52,11 @@ export default function WebIdAnalysis(props: { event: EventTableData; onWebIdRes
     const occupancyObsIdRef = useRef<string | null>(occupancyObsId);
     occupancyObsIdRef.current = occupancyObsId;
     const subscribedSourceRef = useRef<any>(null);
+
+    // Re-runs everything below once the lane map lands. Against a remote node it
+    // regularly arrives after this mounts, and laneMapRef is a ref: without this the
+    // panel bails once and stays blank until the alarm is reopened.
+    const laneMap = useSelector(selectLaneMap);
 
     const getLaneEntry = useCallback((): LaneMapEntry | null => {
         if (!props.event?.laneId || !laneMapRef.current) return null;
@@ -226,7 +233,7 @@ export default function WebIdAnalysis(props: { event: EventTableData; onWebIdRes
         return () => {
             cancelled = true;
         };
-    }, [props.event]);
+    }, [props.event, laneMap]);
 
     const fetchData = useCallback(async (cancel: { done: boolean }) => {
         const currLaneEntry = getLaneEntry();
@@ -258,7 +265,7 @@ export default function WebIdAnalysis(props: { event: EventTableData; onWebIdRes
         if (cancel.done) return;
 
         setWebIdLog(collected.filter(result => result?.occupancyObsId === occupancyObsId));
-    }, [props.event, occupancyObsId]);
+    }, [props.event, occupancyObsId, laneMap]);
 
     useEffect(() => {
         // results are per-occupancy; drop the previous event's before refetching
@@ -318,7 +325,7 @@ export default function WebIdAnalysis(props: { event: EventTableData; onWebIdRes
         } catch (err) {
             console.error("Error connecting webid source:", err);
         }
-    }, [props.event, occupancyObsId]);
+    }, [props.event, occupancyObsId, laneMap]);
 
     // Derived rather than state: a previously-viewed occupancy's rows must
     // never render under the current one.

@@ -61,6 +61,7 @@ import {randomUUID} from "osh-js/source/core/utils/Utils";
 import { useBreakpoint } from "@/app/providers";
 import N42Detail from "@/app/_components/n42/N42Detail";
 import { useLanguage } from "@/app/contexts/LanguageContext";
+import {nodeFileServerUrl} from "@/lib/config/RuntimeConfig";
 
 interface FileWithWebId {
     file: File;
@@ -550,7 +551,6 @@ export default function AdjudicationDetail(props: { event: EventTableData }) {
         let newFileNames: any[] = [];
 
         const encoded = btoa(`${node.auth.username}:${node.auth.password}`);
-        const protocol = node.isSecure ? 'https://' : 'http://';
 
         const webIdFiles = filePaths.filter(f => f.webIdEnabled);
         const foregroundFile = webIdFiles.find(f => f.spectrumType === 'foreground');
@@ -561,7 +561,7 @@ export default function AdjudicationDetail(props: { event: EventTableData }) {
 
         if (hasPair) {
             const drf = foregroundFile.detectorResponseFunction || backgroundFile.detectorResponseFunction;
-            const endpoint = `${protocol}${node.address}:${node.port}${node.oshPathRoot}${node.bucketsEndpoint}/adjudication?occupancyObsId=${props.event.occupancyObsId}&laneUid=${laneUid}&webIdEnabled=${foregroundFile.webIdEnabled}&drf=${drf}`;
+            const endpoint = nodeFileServerUrl(node, `adjudication?occupancyObsId=${props.event.occupancyObsId}&laneUid=${laneUid}&webIdEnabled=${foregroundFile.webIdEnabled}&drf=${drf}`);
             const url = new URL(endpoint);
 
             const formData = new FormData();
@@ -598,7 +598,7 @@ export default function AdjudicationDetail(props: { event: EventTableData }) {
 
 
 
-            let endpoint = `${protocol}${node.address}:${node.port}${node.oshPathRoot}${node.bucketsEndpoint}/${fileName}`;
+            let endpoint = nodeFileServerUrl(node, fileName);
 
             const url = new URL(endpoint);
 

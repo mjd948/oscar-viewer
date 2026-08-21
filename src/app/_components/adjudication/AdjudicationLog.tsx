@@ -1,6 +1,8 @@
 "use client";
 
 import React, {useCallback, useContext, useEffect, useState} from "react";
+import {useSelector} from "react-redux";
+import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 import AdjudicationData from "@/lib/data/oscar/adjudication/Adjudication";
 import {EventTableData} from "@/lib/data/oscar/TableHelpers";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
@@ -15,6 +17,7 @@ import { Dialog, DialogTitle, DialogContent } from "@mui/material";
 import {useLanguage} from "@/app/contexts/LanguageContext";
 import {INode} from "@/lib/data/osh/Node";
 import {EventType} from "osh-js/source/core/event/EventType";
+import {nodeFileServerUrl} from "@/lib/config/RuntimeConfig";
 
 
 export default function AdjudicationLog(props: {
@@ -161,12 +164,14 @@ export default function AdjudicationLog(props: {
     useEffect(() => {
         if (props.node == null || !props.node.address || !props.node.port)
             return;
-        const protocol = props.node.isSecure ? 'https://' : 'http://';
-        const endpoint =  `${protocol}${props.node.address}:${props.node.port}${props.node.oshPathRoot}${props.node.bucketsEndpoint}/`
+        const endpoint = nodeFileServerUrl(props.node);
 
         setNodeEndpoint(endpoint)
     }, [props.node]);
 
+
+    // Wakes the two blocks below when the lane map lands; laneMapRef alone cannot.
+    const laneMap = useSelector(selectLaneMap);
 
     const fetchStatuses = useCallback(async() => {
         if (!props.event?.laneId || !laneMapRef.current) return;
@@ -208,7 +213,7 @@ export default function AdjudicationLog(props: {
             });
             setAdjLog(adjDataArr);
         }
-    }, []);
+    }, [laneMap]);
 
     useEffect(() => {
         if (props.event)
@@ -272,7 +277,7 @@ export default function AdjudicationLog(props: {
         }  catch (err) {
             console.error("Error connecting webid source:", err);
         }
-    }, [props.event]);
+    }, [props.event, laneMap]);
 
     useEffect(() => {
         let filteredLog = adjLog.filter((adjData) => adjData?.occupancyObsId ==  props.event.occupancyObsId);
