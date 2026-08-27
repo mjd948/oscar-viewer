@@ -98,6 +98,53 @@ export interface NodeOptions {
     oscarServiceSystem?: typeof System,
 }
 
+/**
+ * The parts of a node that are worth keeping between sessions: what the operator typed
+ * on the Servers page, and nothing else. A Node instance also carries the four osh-js
+ * API clients as own properties, and each of those holds the node's username and
+ * password in its networkProperties, so persisting the instance itself wrote the
+ * credentials into localStorage several extra times over, in places nothing read back.
+ */
+export interface PersistedNode {
+    id: string,
+    name: string,
+    address: string,
+    port: number,
+    oshPathRoot: string,
+    csAPIEndpoint: string,
+    bucketsEndpoint: string,
+    isSecure: boolean,
+    auth: { username: string, password: string },
+    isDefaultNode: boolean,
+}
+
+export function serializeNode(node: INode): PersistedNode {
+    return {
+        id: node.id,
+        name: node.name,
+        address: node.address,
+        port: node.port,
+        oshPathRoot: node.oshPathRoot,
+        csAPIEndpoint: node.csAPIEndpoint,
+        bucketsEndpoint: node.bucketsEndpoint,
+        isSecure: node.isSecure,
+        // Kept non-null on the way out too, matching the constructor: an empty username
+        // is how "no credentials" is spelled everywhere auth is read.
+        auth: {username: node.auth?.username ?? "", password: node.auth?.password ?? ""},
+        isDefaultNode: node.isDefaultNode,
+    };
+}
+
+// A live osh-js System, as opposed to what JSON.parse hands back for one. Builds before
+// PersistedNode stored the whole Node instance, so a saved oscarServiceSystem comes back
+// as a prototype-less husk: it passes the `!= null` guard its callers write and then
+// throws "searchControlStreams is not a function", which also suppresses the
+// fetchNodeControlStreams() fallback in their else branch. Drop anything that is not a
+// real System so those guards mean what they say.
+function isLiveSystem(value: any): boolean {
+    return value instanceof System || typeof value?.searchControlStreams === "function";
+}
+
 export class Node implements INode {
     id: string;
     name: string;
@@ -177,7 +224,7 @@ export class Node implements INode {
         this.systemsApi = new Systems(networkProperties);
         this.observationsApi = new Observations(networkProperties);
         this.controlStreamApi = new ControlStreams(networkProperties);
-        this.oscarServiceSystem = options.oscarServiceSystem || null;
+        this.oscarServiceSystem = isLiveSystem(options.oscarServiceSystem) ? options.oscarServiceSystem : null;
 
     }
 

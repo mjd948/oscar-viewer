@@ -11,7 +11,7 @@ import {enableMapSet} from "immer";
 import {RootState} from "../Store";
 // @ts-ignore
 import {INode} from "@/app/data/osh/Node";
-import {Node} from "@/lib/data/osh/Node";
+import {Node, serializeNode} from "@/lib/data/osh/Node";
 
 
 
@@ -47,6 +47,7 @@ function loadConfigNodeFromStorage(): INode | null {
         if (!stored) return null;
 
         const parsed = JSON.parse(stored);
+        if (!parsed) return null;
 
         return rehydrateNode(parsed);
     } catch(e) {
@@ -61,23 +62,39 @@ const initialState: IOSHSlice = {
     configNode: loadConfigNodeFromStorage()
 }
 
+// Nodes saved by earlier builds are whole serialized Node instances rather than the
+// PersistedNode projection, so they carry osh-js API clients and an oscarServiceSystem
+// husk alongside the fields below. The constructor reads only the fields it knows and
+// rejects an oscarServiceSystem that is not a live System, so both shapes load.
 function rehydrateNode(obj: any): Node {
     return new Node({
         ...obj
     });
 }
+
+// Only the node's own configuration is written out. Serializing the Node instance itself
+// also wrote the four osh-js API clients it holds, each carrying another copy of the
+// node's username and password - see PersistedNode.
+function persistNodes(nodes: INode[]) {
+    localStorage.setItem("osh_nodes", JSON.stringify(nodes.map((node: INode) => serializeNode(node))));
+}
+
+function persistConfigNode(node: INode | null) {
+    localStorage.setItem("osh_config_node", JSON.stringify(node ? serializeNode(node) : null));
+}
+
 export const Slice = createSlice({
     name: 'OSHSlice',
     initialState,
     reducers: {
         addNode: (state, action: PayloadAction<INode>) => {
             state.nodes.push(action.payload);
-            localStorage.setItem("osh_nodes", JSON.stringify(state.nodes));
+            persistNodes(state.nodes);
 
         },
         setNodes: (state, action: PayloadAction<INode[]>) => {
             state.nodes = action.payload
-            localStorage.setItem("osh_nodes", JSON.stringify(state.nodes));
+            persistNodes(state.nodes);
         },
         /**
          * Replaces an existing node with an edited copy of it.
@@ -93,24 +110,24 @@ export const Slice = createSlice({
             if (nodeIndex === -1) return;
 
             state.nodes[nodeIndex] = node as Node;
-            localStorage.setItem("osh_nodes", JSON.stringify(state.nodes));
+            persistNodes(state.nodes);
 
             // The config node is a separate copy rather than a reference into the list, so
             // without this it stays behind at the old address for as long as localStorage
             // survives - and it is what the app boots against.
             if (state.configNode?.id === previousId) {
                 state.configNode = node;
-                localStorage.setItem("osh_config_node", JSON.stringify(state.configNode));
+                persistConfigNode(state.configNode);
             }
         },
         removeNode: (state, action: PayloadAction<string>) => {
             const nodeIndex = state.nodes.findIndex((node: INode) => node.id === action.payload);
             state.nodes.splice(nodeIndex, 1);
-            localStorage.setItem("osh_nodes", JSON.stringify(state.nodes));
+            persistNodes(state.nodes);
         },
         changeConfigNode: (state, action: PayloadAction<INode>) => {
             state.configNode = action.payload;
-            localStorage.setItem("osh_config_node", JSON.stringify(state.configNode));
+            persistConfigNode(state.configNode);
 
         },
     },
