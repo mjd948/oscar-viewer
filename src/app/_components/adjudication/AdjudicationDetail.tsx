@@ -550,7 +550,9 @@ export default function AdjudicationDetail(props: { event: EventTableData }) {
     async function sendFileUploadRequest(filePaths: FileWithWebId[], node: INode) {
         let newFileNames: any[] = [];
 
-        const encoded = btoa(`${node.auth.username}:${node.auth.password}`);
+        // Via the node's own helper: a node with no credentials has auth.username "",
+        // and hand-rolling btoa here threw outright when auth was null.
+        const authHeader = node.getBasicAuthHeader();
 
         const webIdFiles = filePaths.filter(f => f.webIdEnabled);
         const foregroundFile = webIdFiles.find(f => f.spectrumType === 'foreground');
@@ -570,7 +572,7 @@ export default function AdjudicationDetail(props: { event: EventTableData }) {
 
             const options: RequestInit = {
                 method: 'POST',
-                headers: {'Authorization': `Basic ${encoded}`},
+                headers: {...authHeader},
                 mode: 'cors',
                 body: formData
             };
@@ -607,7 +609,7 @@ export default function AdjudicationDetail(props: { event: EventTableData }) {
 
             const options: RequestInit = {
                 method: 'POST',
-                headers: {'Authorization': `Basic ${encoded}`},
+                headers: {...authHeader},
                 mode: 'cors',
                 body: formData
             };

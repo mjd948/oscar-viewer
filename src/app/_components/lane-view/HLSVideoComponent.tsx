@@ -47,7 +47,9 @@ export default function HLSVideoComponent({
             const videoEl = videoRef.current;
             if (!videoEl) return;
 
-            const encoded = btoa(`${selectedNode.auth.username}:${selectedNode.auth.password}`);
+            // Via the node's own helper, which yields no header at all for a node with no
+            // credentials rather than throwing on a null auth.
+            const authHeader: Record<string, string> = selectedNode.getBasicAuthHeader();
 
             // Retry budget applied to playlist and fragment loads so a transient 404 (a
             // segment that rolled out of the short live window) self-heals inside hls.js.
@@ -80,7 +82,7 @@ export default function HLSVideoComponent({
                 liveSyncDurationCount: 1,
                 liveMaxLatencyDurationCount: 4,
                 xhrSetup: function (xhr: XMLHttpRequest, url: string) {
-                    xhr.setRequestHeader("Authorization", `Basic ${encoded}`);
+                    Object.entries(authHeader).forEach(([k, v]) => xhr.setRequestHeader(k, v));
                     xhr.setRequestHeader("Cache-Control", "no-cache");
                     xhr.withCredentials = true;
                 },

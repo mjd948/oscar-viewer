@@ -79,12 +79,28 @@ export const Slice = createSlice({
             state.nodes = action.payload
             localStorage.setItem("osh_nodes", JSON.stringify(state.nodes));
         },
-        updateNode: (state, action: PayloadAction<INode>) => {
-            const nodeIndex = state.nodes.findIndex((node: INode) => node.name === action.payload.name);
+        /**
+         * Replaces an existing node with an edited copy of it.
+         *
+         * Keyed on the id the edit started from. Matching used to be by name, so renaming
+         * a node quietly saved nothing at all: the lookup searched for the new name and
+         * found no row. Matching on the new id would fail the same way, since the id is
+         * derived from the address and port and changes whenever either is edited.
+         */
+        updateNode: (state, action: PayloadAction<{previousId: string, node: INode}>) => {
+            const {previousId, node} = action.payload;
+            const nodeIndex = state.nodes.findIndex((n: INode) => n.id === previousId);
+            if (nodeIndex === -1) return;
 
-            if (nodeIndex !== -1) {
-                state.nodes[nodeIndex] = action.payload as Node;
-                localStorage.setItem("osh_nodes", JSON.stringify(state.nodes));
+            state.nodes[nodeIndex] = node as Node;
+            localStorage.setItem("osh_nodes", JSON.stringify(state.nodes));
+
+            // The config node is a separate copy rather than a reference into the list, so
+            // without this it stays behind at the old address for as long as localStorage
+            // survives - and it is what the app boots against.
+            if (state.configNode?.id === previousId) {
+                state.configNode = node;
+                localStorage.setItem("osh_config_node", JSON.stringify(state.configNode));
             }
         },
         removeNode: (state, action: PayloadAction<string>) => {

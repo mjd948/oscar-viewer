@@ -8,7 +8,7 @@ import {setLaneMap} from "@/lib/state/OSCARLaneSlice";
 import {AppDispatch, RootState} from "@/lib/state/Store";
 import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import {INode, Node, NodeOptions} from "@/lib/data/osh/Node";
-import {loadRuntimeConfig, isDesktopClient, registerUpstreams} from "@/lib/config/RuntimeConfig";
+import {loadRuntimeConfig, isDesktopClient, registerUpstreams, resolveNodePort} from "@/lib/config/RuntimeConfig";
 
 
 
@@ -158,7 +158,9 @@ export const initializeDefaultNode = () => async (dispatch: AppDispatch) => {
         : {
             name: "Local Node",
             address: window.location.hostname,
-            port: Number(window.location.port),
+            // "" on every origin that uses the scheme's default port, and Number("") is
+            // 0 - which is how this seeded a node that asked for "https://host:0/...".
+            port: resolveNodePort(window.location.port, window.location.protocol === "https:"),
             oshPathRoot: "/sensorhub",
             csAPIEndpoint: "/api",
             isSecure: window.location.protocol === "https:",

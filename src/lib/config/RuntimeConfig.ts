@@ -54,6 +54,12 @@ export function isDesktopClient(): boolean {
  * server, which attaches them on the way out. The node's real address is registered
  * separately - see registerUpstreams - and never used as a transport address here.
  *
+ * The tls reported for the desktop client is the LOCAL server's, which is loopback http
+ * and has nothing to do with the node: node.isSecure describes the second leg, which this
+ * page never makes and cannot influence from here. It travels with the registration, and
+ * the local server acts on it. Reading node.isSecure here instead would ask the renderer
+ * to open https against a plain-http local server and break every request.
+ *
  * Returning the node's own address in the browser case keeps a node-served deployment
  * behaving exactly as it did.
  */
@@ -66,7 +72,33 @@ export function nodeTransport(
             tls: window.location.protocol === "https:",
         };
     }
-    return { host: `${node.address}:${node.port}`, tls: node.isSecure ?? false };
+
+    const tls = node.isSecure ?? false;
+    const port = resolveNodePort(node.port, tls);
+
+    // An explicit default port is redundant, and it is the one shape a reverse proxy is
+    // least likely to expect in a Host header, so leave it off. A non-default port is
+    // always spelled out, including the deliberately odd combinations (http on 443).
+    const suffix = port === (tls ? 443 : 80) ? "" : `:${port}`;
+
+    return { host: `${node.address}${suffix}`, tls };
+}
+
+/**
+ * The port a node should actually be contacted on.
+ *
+ * window.location.port is "" whenever the origin uses the scheme's default port - which
+ * is every https deployment behind a proxy - and Number("") is 0. A node seeded from
+ * such an origin asked for "https://host:0/sensorhub/api", which the browser refuses
+ * outright with ERR_UNSAFE_PORT, so every request the app made failed before it left
+ * the tab. A half-typed port box parses to NaN and lands in the same place.
+ *
+ * Neither 0 nor NaN is a port, so fall back to the default for the scheme.
+ */
+export function resolveNodePort(port: unknown, isSecure: boolean = false): number {
+    const parsed = Number(port);
+    const usable = Number.isInteger(parsed) && parsed > 0 && parsed <= 65535;
+    return usable ? parsed : (isSecure ? 443 : 80);
 }
 
 let cached: Promise<OscarRuntimeConfig | null> | null = null;
@@ -144,7 +176,7 @@ export function nodeFileServerUrl(
  * browser, where requests go to the node directly and carry their own Authorization.
  */
 export async function registerUpstreams(
-    nodes: Array<{ id: string; address: string; port: number; auth?: { username: string; password: string } | null }>
+    nodes: Array<{ id: string; address: string; port: number; isSecure?: boolean; auth?: { username: string; password: string } | null }>
 ): Promise<void> {
     if (!isDesktopClient()) return;
 
@@ -156,6 +188,12 @@ export async function registerUpstreams(
                 id: n.id,
                 address: n.address,
                 port: n.port,
+                // The only place the node's own scheme is ever transmitted. nodeTransport
+                // deliberately reports the local server's scheme rather than this one, so
+                // without it here the local server had no way to learn that an upstream
+                // speaks https - and sent cleartext at port 443 for every request while
+                // the Servers page went on showing the node as "Secure".
+                isSecure: n.isSecure === true,
                 auth: n.auth?.username
                     ? { username: n.auth.username, password: n.auth.password ?? "" }
                     : null,

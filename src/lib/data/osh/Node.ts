@@ -14,7 +14,7 @@ import SystemFilter from "osh-js/source/core/consysapi/system/SystemFilter.js";
 import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
 import ControlStreams from "osh-js/source/core/consysapi/controlstream/ControlStreams";
 import { hashString } from "@/app/utils/Utils";
-import { nodeTransport } from "@/lib/config/RuntimeConfig";
+import { nodeTransport, resolveNodePort } from "@/lib/config/RuntimeConfig";
 import {LatLngExpression} from "leaflet";
 import ControlStreamFilter from "osh-js/source/core/consysapi/controlstream/ControlStreamFilter";
 import DataStream from "osh-js/source/core/consysapi/datastream/DataStream.js";
@@ -31,7 +31,7 @@ export interface INode {
     csAPIEndpoint: string,
     bucketsEndpoint: string,
     isSecure: boolean,
-    auth: { username: string, password: string } | null,
+    auth: { username: string, password: string },
     isDefaultNode: boolean
     laneAdjMap?: Map<string, string>,
     oscarServiceSystem: any;
@@ -107,7 +107,7 @@ export class Node implements INode {
     csAPIEndpoint: string;
     bucketsEndpoint: string;
     isSecure: boolean;
-    auth: { username: string, password: string } | null = null;
+    auth: { username: string, password: string } = {username: "", password: ""};
     isDefaultNode: boolean;
     laneAdjMap: Map<string, string> = new Map<string, string>();
     siteMapPath: string;
@@ -121,21 +121,37 @@ export class Node implements INode {
     controlStreamApi: typeof ControlStreams;
 
     constructor(options: NodeOptions) {
-        this.id = "node-" + hashString(options.address + "-" + options.port); // TODO: maybe do something else here
+        this.isSecure = options.isSecure || false;
+        // Normalised before the id is derived from it, so a node persisted with an
+        // unusable port resolves to the same id whichever copy - the node list or the
+        // config node - happens to be rehydrated first.
+        this.port = resolveNodePort(options.port, this.isSecure);
+        this.id = "node-" + hashString(options.address + "-" + this.port); // TODO: maybe do something else here
         this.name = options.name;
         this.address = options.address;
-        this.port = options.port;
         this.oshPathRoot = options.oshPathRoot || '/sensorhub';
         this.csAPIEndpoint = options.csAPIEndpoint || '/api';
         this.bucketsEndpoint = options.bucketsEndpoint || '/buckets';
-        this.auth = options.auth || null;
-        this.isSecure = options.isSecure || false;
+        // Never null. The Servers form reads auth.username straight into a text field,
+        // and a node seeded from the current origin carries no credentials, so a null
+        // here took the whole page down with "Cannot read properties of null". An empty
+        // username already means "no credentials" everywhere auth is consumed - see
+        // getBasicAuthHeader and registerUpstreams.
+        this.auth = options.auth ?? {username: "", password: ""};
         this.isDefaultNode = options.isDefaultNode || false;
 
         // A node with no credentials is an ordinary situation - the operator has not
         // signed in yet - and used to throw here, which left the app with no node at all
         // and no visible reason why.
-        const credentials = this.auth ?? {username: undefined, password: undefined};
+        //
+        // The keys are left out altogether rather than set to undefined. osh-js tests
+        // `'username' in connectorOpts` (ConnectedSystemsApi.getHeaders), so a key that is
+        // merely undefined still selects the Basic branch and every REST call goes out as
+        // "Basic dW5kZWZpbmVkOnVuZGVmaW5lZA==" - the exact header getBasicAuthHeader()
+        // was written to avoid sending.
+        const credentials: {username?: string, password?: string} = this.auth.username
+            ? {username: this.auth.username, password: this.auth.password ?? ''}
+            : {};
 
         // Transport address, which is NOT the node's address in the desktop client: see
         // nodeTransport. address/port stay the node's own, since they are what the user
@@ -146,8 +162,7 @@ export class Node implements INode {
             shared: true,
             prefix: this.csAPIEndpoint,
             endpointUrl: `${transport.host}${this.oshPathRoot}`,   // == getMqttEndpoint()
-            username: credentials.username,
-            password: credentials.password,
+            ...credentials,
         }
 
         let networkProperties = {
@@ -155,10 +170,7 @@ export class Node implements INode {
             tls: transport.tls,
             streamProtocol: "mqtt",
             mqttOpts: mqttOpts,
-            connectorOpts: {
-                username: credentials.username,
-                password: credentials.password
-            }
+            connectorOpts: {...credentials}
         }
 
         this.dataStreamsApi = new DataStreams(networkProperties);
