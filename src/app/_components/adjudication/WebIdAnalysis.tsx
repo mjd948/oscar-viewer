@@ -11,6 +11,7 @@ import {
     LaneMapEntry,
 } from "@/lib/data/oscar/LaneCollection";
 import DataStream from "osh-js/source/core/consysapi/datastream/DataStream";
+import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
 import {IWebIdIsotope} from "@/lib/data/oscar/adjudication/WebId";
 import WebIdAnalysisResult from "@/lib/data/oscar/adjudication/WebId";
 import {WEB_ID_DEF} from "@/lib/data/Constants";
@@ -197,20 +198,40 @@ export default function WebIdAnalysis(props: {
             return;
         }
 
-        const accumulated: WebIdAnalysisResult[] = [];
-        let query = await webIdDatastream.searchObservations(undefined, 100);
-        let pagesRead = 0;
+        // Ask the server for this occupancy's results only. The unfiltered scan returns the
+        // stream oldest-first and stops after 25 pages, so on a node with more than 2,500
+        // WebID results every recent event's analysis was simply never read. Filtering by
+        // occupancy (rather than a time window around the event) also keeps results from a
+        // secondary-inspection upload made hours later.
+        const readPages = async (filter?: typeof ObservationFilter): Promise<WebIdAnalysisResult[]> => {
+            const results: WebIdAnalysisResult[] = [];
+            const query = await webIdDatastream.searchObservations(filter, 100);
+            let pagesRead = 0;
+            while (query.hasNext() && pagesRead < 25) {
+                pagesRead += 1;
+                const obsCollection = await query.nextPage();
+                for (const obs of obsCollection)
+                    results.push(new WebIdAnalysisResult(obs.resultTime, obs.result));
+            }
+            return results;
+        };
 
-        while (query.hasNext() && pagesRead < 25) {
-            pagesRead += 1;
-            let obsCollection = await query.nextPage();
-            for (const obs of obsCollection) {
-                accumulated.push(new WebIdAnalysisResult(obs.resultTime, obs.result));
+        let accumulated: WebIdAnalysisResult[] = [];
+        if (targetOccupancyObsId) {
+            try {
+                accumulated = await readPages(new ObservationFilter({
+                    filter: `occupancyObsId='${String(targetOccupancyObsId).replace(/'/g, "''")}'`,
+                }));
+            } catch (error) {
+                console.warn("Filtered WebID query failed; falling back to a full scan", error);
             }
         }
+        // Never worse than before: with no filtered match, scan the stream as ORNL did.
+        if (accumulated.length === 0)
+            accumulated = await readPages(undefined);
         accumulated.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
         setWebIdLog(accumulated);
-    }, [currentLane, laneMapRef]);
+    }, [currentLane, laneMapRef, targetOccupancyObsId]);
 
     useEffect(() => {
         if (props.event && targetOccupancyObsId) {
