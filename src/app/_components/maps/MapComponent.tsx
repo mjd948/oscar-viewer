@@ -855,15 +855,11 @@ export default function MapComponent() {
         });
     };
 
-    const updateLocationList = (laneName: string, newStatus: string) => {
-        setLocationList((prevState) => {
-            const updatedList = prevState.map((data) =>
-                data.laneName === laneName ? {...data, status: newStatus} : data
-            );
-
-            return updatedList;
-        });
-    };
+    // gamma/neutron alarm states arrive at ~1 Hz per lane; only a real change may re-render
+    // the map and re-run the marker effect.
+    const updateLocationList = (laneName: string, newStatus: string) =>
+        updateLaneMarker(laneName, (marker) =>
+            marker.status === newStatus ? marker : {...marker, status: newStatus});
 
     function getMarkerIcon(status: string) {
         const normalizedStatus = typeof status === 'string' ? status : '';
