@@ -17,6 +17,12 @@ const NETWORK_RETRY_DELAY_MS = 750;
 const MEDIA_RECOVERY_DELAY_MS = 250;
 const PREPARATION_TIMEOUT_MS = 45_000;
 const NATIVE_VIEWER_HEARTBEAT_MS = 4_000;
+/**
+ * After a terminal error the player retries on its own with this backoff (the last delay repeats).
+ * A camera that drops and reconnects in place on the node otherwise stays on the error overlay
+ * until someone clicks Retry, which never happens on an unattended dashboard or wallboard.
+ */
+export const AUTO_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
 
 type PlaybackState = "preparing" | "playing" | "error";
 
@@ -105,6 +111,26 @@ export default function HLSVideoComponent({
         else
             setRetryGeneration((generation) => generation + 1);
     }, [onRetry]);
+
+    const autoRetryAttemptRef = useRef(0);
+    const [autoRetryInSeconds, setAutoRetryInSeconds] = useState<number | null>(null);
+    useEffect(() => {
+        if (playbackState === "playing") {
+            autoRetryAttemptRef.current = 0;
+            return;
+        }
+        if (playbackState !== "error")
+            return;
+        const index = Math.min(autoRetryAttemptRef.current, AUTO_RETRY_DELAYS_MS.length - 1);
+        const delay = AUTO_RETRY_DELAYS_MS[index];
+        setAutoRetryInSeconds(Math.round(delay / 1000));
+        const timer = setTimeout(() => {
+            autoRetryAttemptRef.current++;
+            setAutoRetryInSeconds(null);
+            retryPlayback();
+        }, delay);
+        return () => clearTimeout(timer);
+    }, [playbackState, retryPlayback]);
 
     useEffect(() => {
         if (!videoSource || !selectedNode || !videoRef.current)
@@ -454,6 +480,11 @@ export default function HLSVideoComponent({
                     }}
                 >
                     <Typography align="center">{t("liveVideoPlaybackError")}</Typography>
+                    {autoRetryInSeconds !== null && (
+                        <Typography align="center" variant="body2" data-testid="live-video-auto-retry">
+                            {t("liveVideoAutoRetry", {seconds: autoRetryInSeconds})}
+                        </Typography>
+                    )}
                     <Button onClick={retryPlayback} variant="contained">
                         {t("retry")}
                     </Button>

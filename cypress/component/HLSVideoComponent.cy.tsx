@@ -194,6 +194,57 @@ describe("live HLS video", () => {
         });
     });
 
+    it("retries a terminal error on its own with backoff, and resets after playback resumes", () => {
+        // A camera that reconnects in place on the node must come back on an unattended screen.
+        cy.clock();
+        mountPlayer();
+        const fail = () => currentHls().then((hls) => hls.emit(FakeHls.Events.ERROR, {
+            fatal: true,
+            type: "otherError",
+            error: new Error("stream expired"),
+        }));
+        const players = (count: number) => cy.wrap(null).should(() => expect(FakeHls.instances).to.have.length(count));
+
+        players(1);
+        fail();
+        cy.get('[data-testid="live-video-auto-retry"]').should("contain.text", "5 s");
+        cy.tick(4_999);
+        players(1);
+        cy.tick(1);
+        players(2);
+        cy.get('[data-testid="live-video-preparing"]').should("exist");
+
+        // still broken: the next attempt backs off
+        fail();
+        cy.get('[data-testid="live-video-auto-retry"]').should("contain.text", "15 s");
+        cy.tick(14_999);
+        players(2);
+        cy.tick(1);
+        players(3);
+
+        // recovered: a later failure starts the backoff over
+        dispatchMediaEvent("playing");
+        cy.get('[data-testid="live-video-preparing"]').should("not.exist");
+        cy.get('[data-testid="live-video-error"]').should("not.exist");
+        fail();
+        cy.get('[data-testid="live-video-auto-retry"]').should("contain.text", "5 s");
+        cy.tick(5_000);
+        players(4);
+    });
+
+    it("hands an automatic retry to the parent exactly like a manual one", () => {
+        cy.clock();
+        const onRetry = cy.stub();
+        mountPlayer("live/lane-01/index.m3u8", onRetry);
+        currentHls().then((hls) => hls.emit(FakeHls.Events.ERROR, {
+            fatal: true,
+            type: "otherError",
+            error: new Error("stream expired"),
+        }));
+        cy.get('[data-testid="live-video-error"]').should("exist");
+        cy.tick(5_000).then(() => expect(onRetry).to.have.been.calledOnce);
+    });
+
     it("cancels pending retries and destroys HLS on unmount", () => {
         cy.clock();
         mountPlayer();
