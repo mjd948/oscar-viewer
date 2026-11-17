@@ -26,8 +26,8 @@ export default function VideoWidget({page, widget}: WidgetProps) {
         );
     }
     return (
-        <Box sx={{height: '100%', overflow: 'auto'}}>
-            <VideoMedia key={lane} currentLane={lane}/>
+        <Box sx={{height: '100%', overflow: 'hidden'}}>
+            <VideoMedia key={lane} currentLane={lane} fillHeight/>
         </Box>
     );
 }
