@@ -679,5 +679,7 @@
   "savedQueryDeletedAnnouncement": "Το ερώτημα {name} διαγράφηκε.",
   "savedQueryConditionsSummary": "{count} συνθήκες φίλτρου",
   "savedQueryCustomLabel": "Φιλτραρισμένο ερώτημα",
-  "savedQueriesEmptyHint": "Εφαρμόστε φίλτρο ή αναζήτηση ID οχήματος για αποθήκευση σελιδοδείκτη."
+  "savedQueriesEmptyHint": "Εφαρμόστε φίλτρο ή αναζήτηση ID οχήματος για αποθήκευση σελιδοδείκτη.",
+  "mobileNoDataSince": "Χωρίς δεδομένα από {time}",
+  "viewEvent": "ΠΡΟΒΟΛΗ ΣΥΜΒΑΝΤΟΣ"
 }

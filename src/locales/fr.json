@@ -679,5 +679,7 @@
   "savedQueryDeletedAnnouncement": "Requête {name} supprimée.",
   "savedQueryConditionsSummary": "{count} condition(s) de filtre",
   "savedQueryCustomLabel": "Requête filtrée",
-  "savedQueriesEmptyHint": "Appliquez un filtre ou une recherche d'ID véhicule pour enregistrer un favori."
+  "savedQueriesEmptyHint": "Appliquez un filtre ou une recherche d'ID véhicule pour enregistrer un favori.",
+  "mobileNoDataSince": "Aucune donnée depuis {time}",
+  "viewEvent": "VOIR L'ÉVÉNEMENT"
 }

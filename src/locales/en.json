@@ -679,5 +679,7 @@
   "savedQueryDeletedAnnouncement": "Deleted saved query {name}.",
   "savedQueryConditionsSummary": "{count} filter condition(s)",
   "savedQueryCustomLabel": "Filtered Query",
-  "savedQueriesEmptyHint": "Apply a filter or Vehicle ID search to save a reusable query bookmark."
+  "savedQueriesEmptyHint": "Apply a filter or Vehicle ID search to save a reusable query bookmark.",
+  "mobileNoDataSince": "No data since {time}",
+  "viewEvent": "VIEW EVENT"
 }

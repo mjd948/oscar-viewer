@@ -102,7 +102,12 @@ export function toLeafletSiteDiagramBounds(siteBoundingBox: SiteBoundingBox): Si
 }
 
 export function toLaneMapLocation(result: unknown): LaneMapLocation | null {
-    const location = (result as {location?: {lat?: unknown; lon?: unknown; alt?: unknown}})?.location;
+    // Fixed lanes publish {location}; the RS-350 and Kromek D5 GPS outputs publish {sensorLocation}.
+    const record = result as {
+        location?: {lat?: unknown; lon?: unknown; alt?: unknown};
+        sensorLocation?: {lat?: unknown; lon?: unknown; alt?: unknown};
+    } | null | undefined;
+    const location = record?.location ?? record?.sensorLocation;
     const lat = location?.lat;
     const lon = location?.lon;
     const alt = location?.alt ?? 0;
@@ -228,4 +233,76 @@ export function buildLaneExtentSignature(
         .sort((a, b) => a.laneName.localeCompare(b.laneName))
         .map(({laneName, location}) => `${laneName}:${location.lat.toFixed(6)},${location.lon.toFixed(6)}`)
         .join("|");
+}
+
+/* ------------------------------------------------------------------------------------------
+ * Mobile detectors (RS-350 backpack, Kromek D5 walker)
+ * ---------------------------------------------------------------------------------------- */
+
+/** How long a walker stays red after a live alarm occupancy. */
+export const MOBILE_ALARM_FLASH_MS = 30_000;
+/** Walkers silent for longer than this are drawn offline (GPS publishes at ~1 Hz). */
+export const MOBILE_SILENCE_THRESHOLD_MS = 15_000;
+/** Portal lanes whose ~1 Hz gamma/neutron counts stop arriving for this long are drawn offline. */
+export const LANE_SILENCE_THRESHOLD_MS = 15_000;
+/** Re-evaluation cadence for walker silence and alarm flashes. */
+export const MOBILE_SWEEP_MS = 5_000;
+/** Refresh cadence for the unadjudicated mobile alarm layer. */
+export const MOBILE_ALARM_REFRESH_MS = 30_000;
+/** Server-side CQL for alarms an operator still has to adjudicate. */
+export const UNADJUDICATED_ALARM_FILTER = "(gammaAlarm=true OR neutronAlarm=true) AND adjudicatedIdsCount=0";
+
+export type WalkerState = "normal" | "alarm" | "offline";
+
+const WALKER_COLORS: Record<WalkerState, string> = {
+    normal: "#1565c0",
+    alarm: "#d32f2f",
+    offline: "#9e9e9e",
+};
+export const MOBILE_ALARM_COLOR = WALKER_COLORS.alarm;
+
+/**
+ * Alarm outranks offline: an unacknowledged radiation alarm must never be visually
+ * downgraded because the walker's comms went quiet. Silence is measured from the browser's
+ * arrival time of the last fix, so node/browser clock skew cannot fake it.
+ */
+export function walkerState(
+    lastFixArrivalMs: number | null | undefined,
+    alarmUntilMs: number | null | undefined,
+    reportedOffline: boolean,
+    now: number,
+): WalkerState {
+    if (alarmUntilMs != null && alarmUntilMs > now) return "alarm";
+    if (reportedOffline) return "offline";
+    if (lastFixArrivalMs == null || now - lastFixArrivalMs > MOBILE_SILENCE_THRESHOLD_MS) return "offline";
+    return "normal";
+}
+
+function escapeHtml(value: string): string {
+    return value.replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"}[c]!));
+}
+
+/** Ringed walker glyph; the title carries "no data since" when offline. */
+export function walkerIconHtml(state: WalkerState, title: string): string {
+    const color = WALKER_COLORS[state];
+    return `<div data-walker-state="${state}" title="${escapeHtml(title)}" style="width:30px;height:30px;border-radius:50%;background:#ffffff;border:3px solid ${color};box-shadow:0 1px 4px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;${state === "offline" ? "opacity:.8;" : ""}">`
+        + `<svg viewBox="0 0 24 24" width="20" height="20" fill="${color}"><path d="M13.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2v-7.5l-2.1-2 .6-3C14.8 12 16.8 13 19 13v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1L6 8.3V13h2V9.6l1.8-.7"/></svg>`
+        + `</div>`;
+}
+
+/** Position stamped on a mobile alarm occupancy by the RS-350/D5 occupancy process, if any. */
+export function mobileAlarmPosition(result: any): LaneMapLocation | null {
+    const lat = result?.latitude;
+    const lon = result?.longitude;
+    if (typeof lat !== "number" || typeof lon !== "number") return null;
+    if (lat === 0 && lon === 0) return null;
+    if (!isValidGeographicCoordinate(lat, lon)) return null;
+    return {lat, lon, alt: 0};
+}
+
+/** Local midnight today, as the start of the mobile alarm layer's window. */
+export function startOfLocalDayIso(now: Date = new Date()): string {
+    const day = new Date(now);
+    day.setHours(0, 0, 0, 0);
+    return day.toISOString();
 }

@@ -17,9 +17,10 @@ import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 import "leaflet/dist/leaflet.css"
 import {
     isConnectionDataStream, isGammaDataStream, isLocationDataStream,
-    isNeutronDataStream, isSiteDiagramPathDataStream,
+    isMobileGpsDataStream, isNeutronDataStream, isOccupancyDataStream, isSiteDiagramPathDataStream,
     isTamperDataStream
 } from "@/lib/data/oscar/Utilities";
+import {buildEventDetailsHref} from "@/lib/data/oscar/EventLookup";
 import {setCurrentLane} from "@/lib/state/LaneViewSlice";
 import {useAppDispatch} from "@/lib/state/Hooks";
 import L from "leaflet";
@@ -38,7 +39,13 @@ import {
     LANE_MARKER_ICON_SIZE,
     LANE_MARKER_PANE,
     LANE_MARKER_PANE_Z_INDEX,
+    LANE_SILENCE_THRESHOLD_MS,
     LaneMapLocation,
+    MOBILE_ALARM_COLOR,
+    MOBILE_ALARM_FLASH_MS,
+    MOBILE_ALARM_REFRESH_MS,
+    MOBILE_SWEEP_MS,
+    mobileAlarmPosition,
     OSM_TILE_URL,
     resolveLaneMapLocation,
     SITE_DIAGRAM_FIT_OPTIONS,
@@ -47,14 +54,32 @@ import {
     SiteDiagramBounds,
     toLaneMapLocationFromSystem,
     toLeafletLaneExtentBounds,
+    toLaneMapLocation,
     toLeafletSiteDiagramBounds,
+    startOfLocalDayIso,
+    UNADJUDICATED_ALARM_FILTER,
+    walkerIconHtml,
+    walkerState,
 } from "@/app/_components/maps/MapUtils";
 
 interface LaneMarkerState {
     laneName: string;
     location: LaneMapLocation;
     status: string;
+    /** Mobile detector lane: drawn as a walker that follows its live GPS fixes. */
+    mobile?: boolean;
+    /**
+     * Position used for the lane-extent fit. A walker's first fix, so a moving walker does
+     * not re-fit (and reset the user's pan/zoom) on every GPS update.
+     */
+    fitLocation?: LaneMapLocation;
+    /** Browser arrival time of the walker's latest fix (or the mount-time grace baseline). */
+    lastFixAt?: number;
+    /** A live alarm keeps the walker red until this time. */
+    alarmUntil?: number;
 }
+
+const fitLocationOf = (marker: LaneMarkerState) => marker.fitLocation ?? marker.location;
 
 
 export default function MapComponent() {
@@ -81,9 +106,16 @@ export default function MapComponent() {
     locationListRef.current = locationList;
 
     const laneExtentSignature = useMemo(
-        () => buildLaneExtentSignature(locationList),
+        () => buildLaneExtentSignature(locationList.map((marker) => ({
+            laneName: marker.laneName,
+            location: fitLocationOf(marker),
+        }))),
         [locationList],
     );
+    // Re-render tick for silence/alarm-flash transitions that no message announces.
+    const [sweepTick, setSweepTick] = useState(0);
+    const mobileAlarmMarkersRef = useRef<Map<string, L.CircleMarker>>(new Map());
+    const refreshMobileAlarmsRef = useRef<() => void>(() => {});
 
     const fitMapToActiveExtent = useCallback((resetUserAdjustment = false) => {
         const view = leafletViewRef.current;
@@ -94,7 +126,7 @@ export default function MapComponent() {
             hasUserAdjustedViewRef.current = false;
 
         const laneBoundsCoords = toLeafletLaneExtentBounds(
-            locationListRef.current.map((item) => item.location),
+            locationListRef.current.map(fitLocationOf),
         );
 
         if (laneBoundsCoords) {
@@ -135,7 +167,9 @@ export default function MapComponent() {
             laneName: string;
             dataStream: any | null;
             systemLocation: LaneMapLocation | null;
+            mobile: boolean;
         }> = [];
+        const seededAt = Date.now();
 
         for (const [laneName, lane] of laneMap.entries()) {
             const laneDSColl = new LaneDSColl();
@@ -157,14 +191,21 @@ export default function MapComponent() {
                     laneDSColl.addDS('tamperRT', realtimeSource);
                 if (realtimeSource && isConnectionDataStream(dataStream))
                     laneDSColl.addDS('connectionRT', realtimeSource);
+                if (realtimeSource && isMobileGpsDataStream(dataStream))
+                    laneDSColl.addDS('locRT', realtimeSource);
+                if (realtimeSource && isOccupancyDataStream(dataStream))
+                    laneDSColl.addDS('occRT', realtimeSource);
             });
 
-            const laneLocationStream = locationStreams.find((dataStream) =>
+            // A mobile detector's position is its live GPS fix, not the lane's configured location.
+            const gpsStream = lane.datastreams.find((dataStream) => isMobileGpsDataStream(dataStream)) ?? null;
+            const laneLocationStream = gpsStream ?? locationStreams.find((dataStream) =>
                 dataStream?.properties?.["system@id"] === laneSystemId) ?? locationStreams[0] ?? null;
             locationSources.push({
                 laneName,
                 dataStream: laneLocationStream,
                 systemLocation: toLaneMapLocationFromSystem(lane.laneSystem),
+                mobile: gpsStream !== null,
             });
         }
         setDataSourcesByLane(laneDSMap);
@@ -175,22 +216,29 @@ export default function MapComponent() {
         setLocationList((current) => {
             const currentByLane = new Map(current.map((item) => [item.laneName, item]));
             return locationSources
-                .map(({laneName, systemLocation}) => {
+                .map(({laneName, systemLocation, mobile}) => {
                     const existing = currentByLane.get(laneName);
-                    const location = systemLocation ?? existing?.location ?? null;
+                    const location = (mobile && existing?.location) || systemLocation || existing?.location || null;
                     if (!location)
                         return null;
                     return {
                         laneName,
                         location,
                         status: existing?.status ?? 'None',
+                        ...(mobile ? {
+                            mobile,
+                            fitLocation: existing?.fitLocation ?? location,
+                            // grace baseline: never call a walker silent before its first live fix could arrive
+                            lastFixAt: existing?.lastFixAt ?? seededAt,
+                            alarmUntil: existing?.alarmUntil,
+                        } : {}),
                     } as LaneMarkerState;
                 })
                 .filter((marker): marker is LaneMarkerState => marker !== null);
         });
 
         const loadLatestLocations = async () => {
-            const markers = await Promise.all(locationSources.map(async ({laneName, dataStream, systemLocation}) => {
+            const markers = await Promise.all(locationSources.map(async ({laneName, dataStream, systemLocation, mobile}) => {
                 if (!dataStream) {
                     if (!systemLocation)
                         console.warn(`No configured location is available for lane ${laneName}`);
@@ -208,7 +256,7 @@ export default function MapComponent() {
                         console.warn(`No valid latest location is available for lane ${laneName}`);
                         return null;
                     }
-                    return {laneName, location, status: 'None'} as LaneMarkerState;
+                    return {laneName, location, status: 'None', ...(mobile ? {mobile} : {})} as LaneMarkerState;
                 } catch (error) {
                     console.error(`Unable to load the latest location for lane ${laneName}`, error);
                     return systemLocation
@@ -220,10 +268,22 @@ export default function MapComponent() {
             if (cancelled) return;
             setLocationList((current) => markers
                 .filter((marker): marker is LaneMarkerState => marker !== null)
-                .map((marker) => ({
-                    ...marker,
-                    status: current.find((item) => item.laneName === marker.laneName)?.status ?? marker.status,
-                })));
+                .map((marker) => {
+                    const existing = current.find((item) => item.laneName === marker.laneName);
+                    if (!marker.mobile)
+                        return {...marker, status: existing?.status ?? marker.status};
+                    // A live fix that arrived before this REST seed is newer: keep it.
+                    const liveFixArrived = existing?.lastFixAt != null && existing.lastFixAt > seededAt;
+                    const location = liveFixArrived ? existing!.location : marker.location;
+                    return {
+                        ...marker,
+                        location,
+                        status: existing?.status ?? marker.status,
+                        fitLocation: marker.location,
+                        lastFixAt: existing?.lastFixAt ?? seededAt,
+                        alarmUntil: existing?.alarmUntil,
+                    };
+                }));
         };
 
         void loadLatestLocations();
@@ -256,25 +316,65 @@ export default function MapComponent() {
             });
         };
 
+        const subscribedAt = Date.now();
         for (const [laneName, laneDSColl] of dataSourcesByLane.entries()) {
             const msgLaneName = laneName;
+            const isMobileLane = laneDSColl.locRT.length > 0;
+            // Portal lanes are judged silent by their ~1 Hz gamma/neutron counts (arrival time,
+            // so node/browser clock skew cannot fake it); the grace baseline is subscription time.
+            if (!isMobileLane && laneDSColl.gammaRT.length + laneDSColl.neutronRT.length > 0)
+                deviceMessageAtRef.current.set(msgLaneName, subscribedAt);
+            const noteDeviceMessage = () => deviceMessageAtRef.current.set(msgLaneName, Date.now());
 
             subscribe(laneDSColl.connectionRT, (message: any) => {
-                const connection = message.values?.[0]?.data?.connection;
-                if (active && connection !== undefined)
-                    updateLocationList(msgLaneName, connection);
+                // The connectionStatus record's field is isConnected; "connection" never existed,
+                // so the map used to ignore every connection message.
+                const data = message.values?.[0]?.data;
+                const connected = data?.isConnected ?? data?.connection;
+                if (!active || typeof connected !== "boolean") return;
+                updateLaneMarker(msgLaneName, (marker) => {
+                    if (!connected)
+                        return marker.status === 'Alarm' ? marker : {...marker, status: 'Offline'};
+                    // "true" from the module is only believed while the device is still talking
+                    return marker.status === 'Offline' && !isLaneSilent(msgLaneName, marker, Date.now())
+                        ? {...marker, status: 'None'}
+                        : marker;
+                });
             });
 
             subscribe(laneDSColl.gammaRT, (message: any) => {
+                noteDeviceMessage();
                 const alarmstate = message.values?.[0]?.data?.alarmState;
                 if (active && alarmstate !== undefined)
                     updateLocationList(msgLaneName, alarmstate);
             });
             subscribe(laneDSColl.neutronRT, (message: any) => {
+                noteDeviceMessage();
                 const alarmstate = message.values?.[0]?.data?.alarmState;
                 if (active && alarmstate !== undefined)
                     updateLocationList(msgLaneName, alarmstate);
             });
+
+            if (isMobileLane) {
+                subscribe(laneDSColl.locRT, (message: any) => {
+                    const location = toLaneMapLocation(message.values?.[0]?.data);
+                    if (!active || !location || (location.lat === 0 && location.lon === 0)) return;
+                    updateLaneMarker(msgLaneName, (marker) => ({
+                        ...marker,
+                        location,
+                        fitLocation: marker.fitLocation ?? location,
+                        lastFixAt: Date.now(),
+                        status: marker.status === 'Offline' ? 'None' : marker.status,
+                    }));
+                });
+                subscribe(laneDSColl.occRT, (message: any) => {
+                    const data = message.values?.[0]?.data;
+                    if (!active || !(data?.gammaAlarm || data?.neutronAlarm)) return;
+                    updateLaneMarker(msgLaneName, (marker) => ({...marker, alarmUntil: Date.now() + MOBILE_ALARM_FLASH_MS}));
+                    // give the node a moment to persist the occupancy before re-querying the alarm layer
+                    window.setTimeout(() => refreshMobileAlarmsRef.current(), 2_000);
+                });
+            }
             subscribe(laneDSColl.tamperRT, (message: any) => {
                 const tamperState = message.values?.[0]?.data?.tamperStatus;
                 if (active && tamperState)
@@ -297,6 +397,132 @@ export default function MapComponent() {
         if (dataSourcesByLane.size === 0) return;
         return addSubscriptionCallbacks();
     }, [addSubscriptionCallbacks, dataSourcesByLane]);
+
+    // Silence sweep: a stopped module or dead detector sends nothing at all, so the absence
+    // of messages has to be noticed on a timer (and again when a background tab wakes up).
+    useEffect(() => {
+        if (dataSourcesByLane.size === 0) return;
+        const sweep = () => {
+            const now = Date.now();
+            setLocationList((current) => {
+                let changed = false;
+                const next = current.map((marker) => {
+                    if (marker.mobile || marker.status === 'Alarm' || marker.status === 'Offline'
+                        || !isLaneSilent(marker.laneName, marker, now))
+                        return marker;
+                    changed = true;
+                    return {...marker, status: 'Offline'};
+                });
+                return changed ? next : current;
+            });
+            setSweepTick((tick) => tick + 1);
+        };
+        const timer = window.setInterval(sweep, MOBILE_SWEEP_MS);
+        const onVisible = () => { if (document.visibilityState === 'visible') sweep(); };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
+    }, [dataSourcesByLane]);
+
+    // Unadjudicated mobile alarms, drawn where they happened. The server filters out anything
+    // an operator has adjudicated, so a marker disappears on the next refresh after adjudication.
+    useEffect(() => {
+        const view = leafletViewRef.current;
+        if (!view?.map || !isInit) return;
+        const mobileLanes = Array.from(laneMap.values()).filter((lane) =>
+            lane.datastreams.some((dataStream) => isMobileGpsDataStream(dataStream)));
+        const markers = mobileAlarmMarkersRef.current;
+        if (mobileLanes.length === 0) {
+            refreshMobileAlarmsRef.current = () => {};
+            return;
+        }
+
+        let cancelled = false;
+        let inFlight = false;
+        const refresh = async () => {
+            if (inFlight || cancelled) return;
+            inFlight = true;
+            try {
+                const seen = new Set<string>();
+                const windowStart = startOfLocalDayIso();
+                await Promise.all(mobileLanes.map(async (lane) => {
+                    const occupancyIds = lane.datastreams
+                        .filter((dataStream) => isOccupancyDataStream(dataStream))
+                        .map((dataStream) => dataStream.properties.id);
+                    if (occupancyIds.length === 0) return;
+                    try {
+                        const api = await lane.parentNode.getObservationsApi();
+                        const collection = await api.searchObservations(new ObservationFilter({
+                            dataStream: occupancyIds,
+                            resultTime: `${windowStart}/${new Date().toISOString()}`,
+                            filter: encodeURIComponent(UNADJUDICATED_ALARM_FILTER),
+                            order: "desc",
+                        }), 200);
+                        const observations = await collection.nextPage();
+                        if (cancelled) return;
+                        (observations ?? []).forEach((observation: any) => {
+                            const obsId = observation?.properties?.id ?? observation?.id;
+                            const result = observation?.properties?.result ?? observation?.result;
+                            const position = mobileAlarmPosition(result);
+                            if (!obsId || !position) return;
+                            const key = `${lane.laneName}\u001f${obsId}`;
+                            seen.add(key);
+                            if (markers.has(key)) return;
+                            const kind = t('status.alarm');
+                            const href = scopedHref(buildEventDetailsHref(obsId, lane.parentNode?.id));
+                            const when = result?.startTime ? new Date(result.startTime).toLocaleString() : '';
+                            const marker = L.circleMarker([position.lat, position.lon], {
+                                className: 'mobile-alarm-marker',
+                                radius: 7,
+                                weight: 2,
+                                color: MOBILE_ALARM_COLOR,
+                                fillColor: MOBILE_ALARM_COLOR,
+                                fillOpacity: 0.15,
+                                pane: LANE_MARKER_PANE,
+                            }).addTo(view.map);
+                            marker.bindPopup(
+                                `<div class='point-popup'><strong>${lane.laneName}</strong> — ${kind}`
+                                + `<br/><span style="font-size:0.85em">${when}</span><hr/>`
+                                + `<button onClick='location.href="${href}"' class="popup-button" type="button">${t('viewEvent')}</button></div>`,
+                            );
+                            marker.getElement()?.setAttribute('data-occ-obs', obsId);
+                            markers.set(key, marker);
+                        });
+                    } catch (error) {
+                        // keep the markers we have: a failed query must not clear the layer
+                        console.warn(`Unable to load mobile alarms for lane ${lane.laneName}`, error);
+                        markers.forEach((_marker, key) => {
+                            if (key.startsWith(`${lane.laneName}\u001f`)) seen.add(key);
+                        });
+                    }
+                }));
+                if (cancelled) return;
+                markers.forEach((marker, key) => {
+                    if (!seen.has(key)) {
+                        marker.remove();
+                        markers.delete(key);
+                    }
+                });
+            } finally {
+                inFlight = false;
+            }
+        };
+        refreshMobileAlarmsRef.current = () => { void refresh(); };
+        void refresh();
+        const timer = window.setInterval(() => { void refresh(); }, MOBILE_ALARM_REFRESH_MS);
+        const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', onVisible);
+            refreshMobileAlarmsRef.current = () => {};
+            markers.forEach((marker) => marker.remove());
+            markers.clear();
+        };
+    }, [isInit, laneMap, scopedHref, t]);
 
     useEffect(() => {
         if (!leafletViewRef.current && !isInit) {
@@ -384,14 +610,30 @@ export default function MapComponent() {
         if (!view || !isInit) return;
 
         const renderedLaneNames = new Set<string>();
-        locationList.forEach(({laneName, location, status}) => {
+        const now = Date.now();
+        locationList.forEach((laneMarker) => {
+            const {laneName, location, status} = laneMarker;
             renderedLaneNames.add(laneName);
-            const iconPath = getMarkerIcon(status);
-            const markerIcon = L.icon({
-                iconUrl: iconPath,
-                iconSize: LANE_MARKER_ICON_SIZE,
-                iconAnchor: LANE_MARKER_ICON_ANCHOR,
-            });
+            let markerIcon: L.Icon | L.DivIcon;
+            if (laneMarker.mobile) {
+                const state = walkerState(laneMarker.lastFixAt, laneMarker.alarmUntil, status === 'Offline', now);
+                const title = state === 'offline' && laneMarker.lastFixAt != null
+                    ? `${laneName} — ${t('mobileNoDataSince', {time: new Date(laneMarker.lastFixAt).toLocaleTimeString()})}`
+                    : laneName;
+                markerIcon = L.divIcon({
+                    className: 'mobile-unit-marker',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15],
+                    popupAnchor: [0, -14],
+                    html: walkerIconHtml(state, title),
+                });
+            } else {
+                markerIcon = L.icon({
+                    iconUrl: getMarkerIcon(status),
+                    iconSize: LANE_MARKER_ICON_SIZE,
+                    iconAnchor: LANE_MARKER_ICON_ANCHOR,
+                });
+            }
             let marker = laneMarkerLayersRef.current.get(laneName);
 
             if (!marker) {
@@ -425,7 +667,7 @@ export default function MapComponent() {
                 laneMarkerLayersRef.current.delete(laneName);
             }
         });
-    }, [locationList, isInit, language, t]);
+    }, [locationList, isInit, language, t, sweepTick]);
 
     useEffect(() => {
         if (!isInit || !laneExtentSignature)
@@ -589,6 +831,29 @@ export default function MapComponent() {
                 window.cancelAnimationFrame(fitFrameId);
         };
     }, [fitMapToActiveExtent, isInit, laneMap, laneMapReady, nodes, language]);
+
+    const deviceMessageAtRef = useRef<Map<string, number>>(new Map());
+
+    /** True when a portal lane's device streams, or a walker's GPS, have been quiet too long. */
+    const isLaneSilent = (laneName: string, marker: LaneMarkerState, now: number): boolean => {
+        if (marker.mobile)
+            return walkerState(marker.lastFixAt, undefined, false, now) === 'offline';
+        const last = deviceMessageAtRef.current.get(laneName);
+        return last != null && now - last > LANE_SILENCE_THRESHOLD_MS;
+    };
+
+    const updateLaneMarker = (laneName: string, updater: (marker: LaneMarkerState) => LaneMarkerState) => {
+        setLocationList((prevState) => {
+            let changed = false;
+            const next = prevState.map((data) => {
+                if (data.laneName !== laneName) return data;
+                const updated = updater(data);
+                changed ||= updated !== data;
+                return updated;
+            });
+            return changed ? next : prevState;
+        });
+    };
 
     const updateLocationList = (laneName: string, newStatus: string) => {
         setLocationList((prevState) => {
