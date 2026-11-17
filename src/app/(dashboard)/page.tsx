@@ -40,7 +40,9 @@ import {
 import {removeRealtimeEventSubscription} from "@/lib/data/oscar/RealtimeEventNotification";
 import {
     isGammaDataStream,
+    isMobileGpsDataStream,
     isNeutronDataStream,
+    isOccupancyDataStream,
 } from "@/lib/data/oscar/Utilities";
 import {
     type DashboardWidgetId,
@@ -124,6 +126,9 @@ export default function DashboardPage() {
             nextLaneCollections.set(laneid, {lane, collection: laneDSColl});
 
             if (!cached || cached.lane !== lane) {
+                // RS-350/D5 mobile lanes publish no gamma/neutron alarm-state stream; their alarms
+                // arrive only as occupancies, so those are what has to sound the dashboard alarm.
+                const isMobileLane = lane.datastreams.some((ds) => isMobileGpsDataStream(ds));
                 lane.datastreams.forEach((ds) => {
                     const rtDS = findRealtimeDataSourceForStream(lane, ds);
 
@@ -140,6 +145,9 @@ export default function DashboardPage() {
 
                     if(isNeutronDataStream(ds))
                         laneDSColl.addDS('neutronRT', rtDS);
+
+                    if (isMobileLane && isOccupancyDataStream(ds))
+                        laneDSColl.addDS('occRT', rtDS);
                 });
             }
         }
@@ -164,12 +172,20 @@ export default function DashboardPage() {
         const uniqueSources = new Set<any>();
 
         dataSourcesByLane.forEach((collection) => {
-            [...collection.gammaRT, ...collection.neutronRT].forEach((source) => {
+            const occupancySources = new Set(collection.occRT);
+            [...collection.gammaRT, ...collection.neutronRT, ...collection.occRT].forEach((source) => {
                 if (!source || uniqueSources.has(source))
                     return;
                 uniqueSources.add(source);
+                const isOccupancy = occupancySources.has(source);
                 const handler = (message: any) => {
-                    if (active && message?.values?.[0]?.data?.alarmState === "Alarm")
+                    if (!active) return;
+                    const data = message?.values?.[0]?.data;
+                    const alarming = isOccupancy
+                        // an occupancy already auto-adjudicated (e.g. EML non-threat) must stay silent
+                        ? Boolean(data?.gammaAlarm || data?.neutronAlarm) && !(data?.adjudicatedIds?.length > 0)
+                        : data?.alarmState === "Alarm";
+                    if (alarming)
                         dispatch(setAlarmTrigger(true));
                 };
                 source.subscribe(handler, [EventType.DATA]);
