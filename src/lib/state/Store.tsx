@@ -15,6 +15,7 @@ import OSCARLaneReducer from "@/lib/state/OSCARLaneSlice";
 import EventDetailsReducer from "@/lib/state/EventDetailsSlice";
 import EventPreviewReducer from "@/lib/state/EventPreviewSlice";
 import LaneViewReducer from "@/lib/state/LaneViewSlice";
+import PageLayoutReducer from "@/lib/state/PageLayoutSlice";
 
 // One-time removal of older Redux snapshots. Previous releases could persist
 // graphs containing Node objects indirectly, so retaining selected keys is not
@@ -27,7 +28,7 @@ if (typeof window !== "undefined" && !localStorage.getItem("oscar_credentials_mi
 const persistConfig ={
     key: 'root',
     storage,
-    whitelist: ['oscarClientSlice', 'eventPreview', 'laneView', 'eventLogSlice', "eventDetails"],
+    whitelist: ['oscarClientSlice', 'eventPreview', 'laneView', 'eventLogSlice', "eventDetails", 'pageLayoutSlice'],
     version: 1,
 }
 
@@ -40,6 +41,7 @@ const rootReducer = combineReducers({
     eventPreview: EventPreviewReducer,
     laneView: LaneViewReducer,
     eventDetails: EventDetailsReducer,
+    pageLayoutSlice: PageLayoutReducer,
 });
 
 

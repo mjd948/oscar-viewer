@@ -41,6 +41,13 @@ import {
     setVisualUnreadAlert,
 } from "@/lib/state/OSCARClientSlice";
 import {useDispatch, useSelector} from "react-redux";
+import {useTheme} from "@mui/material/styles";
+import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import {selectNavPages} from "@/lib/state/PageLayoutSlice";
+import {PageConfig} from "@/lib/layout/PageConfigTypes";
+import {getPageIcon} from "@/app/_components/layout/WidgetRegistry";
+import AddPageDialog from "@/app/_components/layout/AddPageDialog";
+import {HeaderSlotProvider} from "@/app/_components/layout/HeaderSlot";
 import { useBreakpoint } from '../providers';
 import LanguageSelector from './LanguageSelector';
 import { useLanguage } from '@/app/contexts/LanguageContext';
@@ -152,6 +159,12 @@ export default function Navbar({children}: { children: React.ReactNode }) {
     const router = useRouter();
     const pathname = usePathname();
     const {activeViewKey, viewError, scopedHref} = React.useContext(DataSourceContext);
+    // Custom widget pages (user-built; ORNL's own pages stay in menuItems) and the app-bar slot
+    // their PageToolbar portals into.
+    const navPages = useSelector(selectNavPages);
+    const [addPageOpen, setAddPageOpen] = useState(false);
+    const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+    const isDarkMode = useTheme().palette.mode === 'dark';
     const savedVolume = useSelector(selectAlarmAudioVolume);
     const continuousAlarmAudio = useSelector(selectContinuousAlarmAudio);
     const visualUnreadAlert = useSelector(selectVisualUnreadAlert);
@@ -365,6 +378,33 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                 ))}
             </List>
             <Divider/>
+            <List data-testid="custom-pages-nav">
+                {navPages.map((page: PageConfig) => (
+                    <Link href={scopedHref(`/custom-page/?id=${page.id}`)} passHref key={page.id} onClick={!isDesktop ? handleDrawerClose : null}>
+                        <ListItem disablePadding sx={{display: 'block'}}>
+                            <ListItemButton sx={{minHeight: 48, justifyContent: drawerOpen ? 'initial' : 'center', px: 2.5}}>
+                                <ListItemIcon sx={{minWidth: 0, mr: drawerOpen ? 2 : 'auto', justifyContent: 'center'}}>
+                                    {getPageIcon(page.icon)}
+                                </ListItemIcon>
+                                <ListItemText primary={page.title} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
+                            </ListItemButton>
+                        </ListItem>
+                    </Link>
+                ))}
+                <ListItem disablePadding sx={{display: 'block'}}>
+                    <ListItemButton
+                        onClick={() => setAddPageOpen(true)}
+                        data-testid="add-page-button"
+                        sx={{minHeight: 48, justifyContent: drawerOpen ? 'initial' : 'center', px: 2.5}}
+                    >
+                        <ListItemIcon sx={{minWidth: 0, mr: drawerOpen ? 2 : 'auto', justifyContent: 'center'}}>
+                            <AddRoundedIcon/>
+                        </ListItemIcon>
+                        <ListItemText primary={t('addPage')} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
+                    </ListItemButton>
+                </ListItem>
+            </List>
+            <Divider/>
             <List>
                 {settingsItems.map((item) => (
                     <Link href={scopedHref(item.href)} passHref key={item.title} onClick={!isDesktop ? handleDrawerClose : null}>
@@ -425,9 +465,23 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                         <MenuIcon/>
                     </IconButton>
                     <Stack direction="row" sx={{flex: '1 1 0%', minInlineSize: 0, gap: 1}} alignItems="center" justifyContent="space-between">
+                        {/* Dark theme gets the bare mark so it sits on the bar seamlessly; light theme
+                            gets the logo's own black tile, since the cream glyph vanishes on a white bar. */}
+                        <Box
+                            component="img"
+                            src={isDarkMode ? '/icons/logo-mark.png' : '/icons/logo-mark-tile.png'}
+                            alt=""
+                            sx={{height: 26, width: 26, flexShrink: 0, ...(isDarkMode ? {} : {borderRadius: 1})}}
+                        />
                         <Typography variant="h6" noWrap component="div" sx={{minInlineSize: 0, flexShrink: 1}}>
                             {t('appTitle')}
                         </Typography>
+                        {/* A custom page's title and edit controls render here (empty on ORNL's pages). */}
+                        <Box
+                            ref={setHeaderSlot}
+                            data-testid="page-header-slot"
+                            sx={{display: 'flex', flex: 1, minWidth: 0, alignItems: 'center', gap: 1, overflow: 'hidden'}}
+                        />
                         {activeViewKey && (
                             <Chip
                                 label={t('operationalViewValue', {view: activeViewKey})}
@@ -624,6 +678,7 @@ export default function Navbar({children}: { children: React.ReactNode }) {
             <Box sx={{display: "none"}}>
                 <AlarmAudio/>
             </Box>
+            <AddPageDialog open={addPageOpen} onClose={() => setAddPageOpen(false)}/>
             <Box
                 component="main"
                 sx={(theme) => ({
@@ -650,7 +705,9 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                                 : t('operationalViewEmpty', {view: activeViewKey ?? ''})}
                         </Alert>
                     )}
-                    {children}
+                    <HeaderSlotProvider node={headerSlot}>
+                        {children}
+                    </HeaderSlotProvider>
                 </Box>
             </Box>
         </Box>

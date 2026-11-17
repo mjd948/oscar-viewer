@@ -41,11 +41,17 @@ export default function LaneStatus({
     onHide,
     expanded = false,
     subscribeAlarmStream = true,
+    laneNames,
+    hideTitle = false,
 }: {
     dataSourcesByLane?: Map<string, LaneDSColl>;
     onHide?: () => void;
     expanded?: boolean;
     subscribeAlarmStream?: boolean;
+    /** Custom-page widgets: show only these lanes (undefined = all). */
+    laneNames?: string[];
+    /** Custom-page widgets: the widget frame already shows a title. */
+    hideTitle?: boolean;
 }) {
     const [tamperLaneToClear, setTamperLaneToClear] = useState<string | null>(null);
     const [isClearingTamper, setIsClearingTamper] = useState(false);
@@ -58,10 +64,12 @@ export default function LaneStatus({
     const {t} = useLanguage();
     const {laneMapRef, scopedHref} = useContext(DataSourceContext);
 
-    const laneRows = useMemo(
-        () => deriveLaneHealthRows(lanes, healthClock, thresholdMinutes),
-        [healthClock, lanes, thresholdMinutes],
-    );
+    const laneRows = useMemo(() => {
+        const rows = deriveLaneHealthRows(lanes, healthClock, thresholdMinutes);
+        if (!laneNames) return rows;
+        const keep = new Set(laneNames);
+        return rows.filter((row) => keep.has(row.laneName));
+    }, [healthClock, laneNames, lanes, thresholdMinutes]);
 
     // The batched health snapshot supplies all visual state. Keep only the
     // gamma/neutron realtime listeners required for the existing alarm sound.
@@ -171,7 +179,7 @@ export default function LaneStatus({
 
     return (
         <Stack justifyContent="start" spacing={1} sx={{p: 1}}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
+            {!hideTitle && <Stack direction="row" justifyContent="space-between" alignItems="center">
                 <Typography variant="h6">{t("laneStatus")}</Typography>
                 {onHide && (
                     <Tooltip title={t("hideWidget")}>
@@ -185,14 +193,14 @@ export default function LaneStatus({
                         </IconButton>
                     </Tooltip>
                 )}
-            </Stack>
+            </Stack>}
             <Box
                 sx={{
                     display: "grid",
                     gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
                     gap: 1,
                     overflowY: "auto",
-                    maxHeight: expanded ? "calc(100vh - 220px)" : 275,
+                    maxHeight: hideTitle ? "none" : expanded ? "calc(100vh - 220px)" : 275,
                     flexGrow: 1,
                 }}
             >

@@ -25,7 +25,10 @@ import {
     GridCellParams,
     gridClasses,
     GridColDef,
+    GridColumnOrderChangeParams,
+    GridColumnResizeParams,
     GridColumnVisibilityModel,
+    useGridApiRef,
     GridRowParams,
     GridRowSelectionModel,
 } from "@mui/x-data-grid";
@@ -148,6 +151,13 @@ import {
 import {formatIso6346} from "@/lib/data/oscar/adjudication/Iso6346";
 import {useVehicleOcrMap} from "@/app/_components/event-table/useVehicleOcrMap";
 import SavedQueriesPopover from "@/app/_components/event-table/SavedQueriesPopover";
+import {EventTableColumnSetting} from "@/lib/layout/PageConfigTypes";
+import {
+    applyColumnSettings,
+    applyFieldOrder,
+    resolveEventTableColumns,
+    visibilityFromColumnSettings,
+} from "@/lib/layout/EventTableColumns";
 import {
     CachedEventLogQuerySnapshot,
     clearFilteredEventLogSnapshot,
@@ -176,6 +186,15 @@ interface TableProps {
     setEvents?: unknown;
     readStateFetch?: DashboardReadStateFetch;
     restoreFiltered?: boolean;
+    /**
+     * Custom-page widgets only: persisted column visibility/order/width. ORNL's own pages pass
+     * nothing and keep the default columns. Changes made in the grid are reported through
+     * onColumnSettingsChange so the widget can persist them.
+     */
+    columnSettings?: EventTableColumnSetting[];
+    onColumnSettingsChange?: (columns: EventTableColumnSetting[]) => void;
+    /** Custom-page widgets only: fill the parent's height instead of the fixed page heights. */
+    fillHeight?: boolean;
 }
 
 type QueryPlan = EventQueryPlan;
@@ -200,6 +219,9 @@ export default function EventTable({
     currentLane,
     readStateFetch,
     restoreFiltered,
+    columnSettings,
+    onColumnSettingsChange,
+    fillHeight = false,
 }: TableProps) {
     const isAlarmTable = tableMode === "alarmtable";
     const isEventLog = tableMode === "eventlog";
@@ -253,7 +275,9 @@ export default function EventTable({
         adjudicatedIds: viewAdjudicated,
         adjudicationCode: false,
         vehicleId: Boolean(initialHydration?.criteria.vehicleSearch),
+        ...(columnSettings ? visibilityFromColumnSettings(columnSettings) : {}),
     }));
+    const gridApiRef = useGridApiRef();
     const [syncedViewAdjudicated, setSyncedViewAdjudicated] = useState(viewAdjudicated);
     if (syncedViewAdjudicated !== viewAdjudicated) {
         setSyncedViewAdjudicated(viewAdjudicated);
@@ -2570,6 +2594,37 @@ export default function EventTable({
         },
     ], [formatAdjudicationCodeLabel, isRowUnread, locale, renderCompactHeader, renderCompactTimestamp, t]);
 
+    const resolvedColumnSettings = useMemo(
+        () => (columnSettings ? resolveEventTableColumns(columnSettings) : undefined),
+        [columnSettings],
+    );
+    const displayColumns = useMemo(
+        () => (resolvedColumnSettings ? applyColumnSettings(columns, resolvedColumnSettings) : columns),
+        [columns, resolvedColumnSettings],
+    );
+    const reportColumnSettings = (next: EventTableColumnSetting[]) => {
+        if (onColumnSettingsChange)
+            onColumnSettingsChange(next);
+    };
+    const handleColumnVisibilityChange = (model: GridColumnVisibilityModel) => {
+        setColumnVisibilityModel(model);
+        if (resolvedColumnSettings)
+            reportColumnSettings(resolvedColumnSettings.map((c) =>
+                c.key in model ? {...c, visible: model[c.key] !== false} : c));
+    };
+    const handleColumnOrderChange = (params: GridColumnOrderChangeParams) => {
+        if (!resolvedColumnSettings) return;
+        const fields = gridApiRef.current?.getAllColumns?.().map((c) => c.field) ?? [];
+        // The grid has already applied the move; read its order back rather than replaying indices
+        // (the checkbox column shifts them).
+        reportColumnSettings(applyFieldOrder(resolvedColumnSettings, fields.length ? fields : [params.column.field]));
+    };
+    const handleColumnWidthChange = (params: GridColumnResizeParams) => {
+        if (!resolvedColumnSettings) return;
+        reportColumnSettings(resolvedColumnSettings.map((c) =>
+            c.key === params.colDef.field ? {...c, width: Math.round(params.width)} : c));
+    };
+
     const getColumnList = () => columns
         .filter(column => viewAdjudicated || (column.field !== "adjudicatedIds" && column.field !== "adjudicationCode"))
         .map(column => column.field);
@@ -2602,7 +2657,7 @@ export default function EventTable({
     const tableLoading = isVehicleSearchMode ? vehicleSearchLoading : loading;
 
     return (
-        <Box sx={{display: "flex", flexDirection: "column", ...(isEventLog ? {minHeight: 860} : {height: 800}), width: "100%"}}>
+        <Box sx={{display: "flex", flexDirection: "column", ...(fillHeight ? {height: "100%"} : isEventLog ? {minHeight: 860} : {height: 800}), width: "100%"}}>
             {isAlarmTable && (
                 <Box
                     role="status"
@@ -2934,14 +2989,17 @@ export default function EventTable({
                     )}
                 </Box>
             )}
-            <Box sx={{...(isEventLog ? {height: 680} : {flex: 1, minHeight: 0}), width: "100%"}}>
+            <Box sx={{...(isEventLog && !fillHeight ? {height: 680} : {flex: 1, minHeight: 0}), width: "100%"}}>
                 <DataGrid
                     localeText={getDataGridLocaleText(language)}
                     rows={effectiveDisplayRows}
                     getRowId={eventSelectionKey}
-                    columns={columns}
+                    apiRef={gridApiRef}
+                    columns={displayColumns}
                     columnVisibilityModel={columnVisibilityModel}
-                    onColumnVisibilityModelChange={setColumnVisibilityModel}
+                    onColumnVisibilityModelChange={handleColumnVisibilityChange}
+                    onColumnOrderChange={handleColumnOrderChange}
+                    onColumnWidthChange={handleColumnWidthChange}
                     columnHeaderHeight={48}
                     rowHeight={48}
                     loading={tableLoading}

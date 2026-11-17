@@ -82,9 +82,14 @@ interface LaneMarkerState {
 const fitLocationOf = (marker: LaneMarkerState) => marker.fitLocation ?? marker.location;
 
 
-export default function MapComponent() {
+export default function MapComponent({containerId = "mapcontainer", height = "100vh"}: {
+    /** DOM id of the Leaflet container. Custom-page map widgets pass their own so two maps can share a page. */
+    containerId?: string;
+    /** Container height; custom-page map widgets fill their tile. */
+    height?: string;
+} = {}) {
     const {language, t} = useLanguage();
-    const mapcontainer: string = "mapcontainer";
+    const mapcontainer: string = containerId;
     const laneMap = useSelector((state: RootState) => selectLaneMap(state));
     const leafletViewRef = useRef<typeof LeafletView | null>(null);
     const siteDiagramLayersRef = useRef<Map<string, L.ImageOverlay>>(new Map());
@@ -884,8 +889,8 @@ export default function MapComponent() {
 
     return (
         <Box
-            id="mapcontainer"
-            sx={{width: '100%', height: '100vh'}}
+            id={mapcontainer}
+            sx={{width: '100%', height}}
         />
     );
 }
