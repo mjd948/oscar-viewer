@@ -58,6 +58,7 @@ export default function HLSVideoComponent({
     viewerId,
     hlsLoader = loadHlsLibrary,
     onRetry,
+    fillHeight = false,
 }: {
     videoSource: string,
     selectedNode: INode,
@@ -67,6 +68,8 @@ export default function HLSVideoComponent({
     hlsLoader?: () => Promise<HlsLibrary>,
     /** Requests one fresh server-side stream after a terminal playback error. */
     onRetry?: () => void,
+    /** Fit the player to its container's height (dashboard widgets) instead of a fixed 500 px. */
+    fillHeight?: boolean,
 }) {
     const {t} = useLanguage();
     const [autoplayBlocked, setAutoplayBlocked] = useState(false);
@@ -425,17 +428,19 @@ export default function HLSVideoComponent({
     }, [videoSource, selectedNode, viewerId, retryGeneration, hlsLoader, startPlayback]);
 
     return (
-        <Box sx={{position: "relative", width: "100%"}}>
+        <Box sx={{position: "relative", width: "100%", ...(fillHeight && {height: "100%"})}}>
             <video
                 id="video"
                 ref={videoRef}
                 width="100%"
-                height="500px"
+                height={fillHeight ? undefined : "500px"}
                 autoPlay
                 controls
                 muted
                 playsInline
-                style={{backgroundColor: "black"}}
+                style={fillHeight
+                    ? {backgroundColor: "black", display: "block", width: "100%", height: "100%", objectFit: "contain"}
+                    : {backgroundColor: "black"}}
             />
             {playbackState === "preparing" && (
                 <Box

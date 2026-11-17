@@ -22,7 +22,11 @@ import {useLanguage} from "@/app/contexts/LanguageContext";
 const VIDEO_COMMAND_TIMEOUT_MS = 10_000;
 
 
-export default function VideoMedia({ currentLane}: { currentLane: string}) {
+export default function VideoMedia({currentLane, fillHeight = false}: {
+    currentLane: string,
+    /** Fit the player to the container's height (dashboard widgets) instead of a fixed 500 px. */
+    fillHeight?: boolean,
+}) {
     const {laneMapRef, readyLaneNames} = useContext(DataSourceContext);
     const {t} = useLanguage();
     const laneReady = Boolean(currentLane && readyLaneNames.has(currentLane));
@@ -228,6 +232,7 @@ export default function VideoMedia({ currentLane}: { currentLane: string}) {
             alignItems: "center",
             width: "100%",
             overflow: "hidden",
+            ...(fillHeight && {height: "100%"}),
         }}>
             <IconButton
                 onClick={handlePreviousPage}
@@ -249,6 +254,7 @@ export default function VideoMedia({ currentLane}: { currentLane: string}) {
                     minWidth: 0,
                     flex: 1,
                     overflow: "hidden",
+                    ...(fillHeight && {height: "100%", boxSizing: "border-box"}),
                 }}
             >
                 {!videoSource && streamStartState === "preparing" && (
@@ -257,7 +263,7 @@ export default function VideoMedia({ currentLane}: { currentLane: string}) {
                         role="status"
                         alignItems="center"
                         spacing={1.5}
-                        sx={{minHeight: "500px", justifyContent: "center"}}
+                        sx={{minHeight: fillHeight ? 0 : "500px", justifyContent: "center"}}
                     >
                         <CircularProgress size={28}/>
                         <Typography align="center">{t("liveVideoPreparing")}</Typography>
@@ -269,7 +275,7 @@ export default function VideoMedia({ currentLane}: { currentLane: string}) {
                         role="alert"
                         alignItems="center"
                         spacing={2}
-                        sx={{minHeight: "500px", justifyContent: "center"}}
+                        sx={{minHeight: fillHeight ? 0 : "500px", justifyContent: "center"}}
                     >
                         <Typography align="center">{t("liveVideoPlaybackError")}</Typography>
                         <Button variant="contained" onClick={retryStreamStart}>
@@ -286,6 +292,7 @@ export default function VideoMedia({ currentLane}: { currentLane: string}) {
                         selectedNode={laneEntry.parentNode}
                         viewerId={viewerId}
                         onRetry={retryStreamStart}
+                        fillHeight={fillHeight}
                     />
                 )}
             </Stack>

@@ -446,4 +446,28 @@ describe("live HLS video", () => {
         expect(buildLiveVideoUrl("%E0%A4%A", node))
             .to.equal("/sensorhub/video-files");
     });
+
+    it("keeps the fixed 500 px player by default (Lane View)", () => {
+        mountPlayer();
+        cy.get("video").invoke("outerHeight").should("eq", 500);
+    });
+
+    it("fits a short dashboard widget when fillHeight is set", () => {
+        cy.mount(
+            <LanguageProvider>
+                <div style={{height: 220, width: 400}} data-testid="widget-body">
+                    <HLSVideoComponent
+                        videoSource={"live\\lane-01\\index.m3u8"}
+                        selectedNode={node}
+                        hlsLoader={hlsLoader}
+                        fillHeight
+                    />
+                </div>
+            </LanguageProvider>,
+        );
+        cy.get("video").invoke("outerHeight").should("eq", 220);
+        cy.get('[data-testid="widget-body"]').then(($body) => {
+            expect($body[0].scrollHeight, "no scrolling inside the widget").to.eq(220);
+        });
+    });
 });
