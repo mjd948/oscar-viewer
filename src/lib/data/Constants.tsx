@@ -80,6 +80,8 @@ const radUri = "http://www.opengis.net/def/"
 
 export const SENSOR_LOCATION_DEF = radUri + "property/OGC/0/SensorLocation";
 export const LOCATION_VECTOR_DEF = smlUri + "LocationVector";
+/** Kromek D5 1 Hz radiometric status report (first field: dose alarm active). */
+export const D5_RAD_STATUS_DEF = smlUri + "doseAlarmActive";
 export const RASTER_IMAGE_DEF = smlUri + "RasterImage";
 export const VIDEO_FRAME_DEF = smlUri + "VideoFrame";
 export const CONFIG_DEF =  smlUri + "Config";

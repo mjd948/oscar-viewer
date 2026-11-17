@@ -9,7 +9,7 @@ import ConnectedSystemsApi from "osh-js/source/core/consysapi/ConnectedSystemsAp
 import {
     ADJ_DEF,
     ALARM_DEF, ASPECT_DAILY_FILE_DEF, CONFIG_DEF,
-    CONNECTION_DEF, DAILY_FILE_DEF, DOSE_DEF, DURATION_DEF, END_DEF, GAMMA_COUNT_DEF, HLS_VIDEO_DEF,
+    CONNECTION_DEF, D5_RAD_STATUS_DEF, DAILY_FILE_DEF, DOSE_DEF, DURATION_DEF, END_DEF, GAMMA_COUNT_DEF, HLS_VIDEO_DEF,
     LINEARSPEC_DEF, LOCATION_VECTOR_DEF, NATIONAL_DEF,
     NEUTRON_COUNT_DEF,
     OCCUPANCY_PILLAR_DEF, OCCUPANCY_STATUS_DEF, OCR_DEF, OGC_CONNECTION_DEF, RAPISCAN_DAILY_FILE_DEF, RASTER_IMAGE_DEF, N42_DEF, REPORT_DEF, SENSOR_LOCATION_DEF,
@@ -60,6 +60,21 @@ export function isLocationDataStream(datastream: typeof DataStream): boolean {
         // the nested vector definition from observedProperties, so retaining
         // this canonical-name fallback keeps fixed lane positions discoverable.
         || normalizedNames.includes("sensorlocation");
+}
+
+/**
+ * GPS fix stream of a mobile detector (RS-350 backpack, Kromek D5): output name "location",
+ * published at ~1 Hz. Deliberately excludes the fixed-position "sensorLocation" output, which
+ * every module publishes once at startup and is therefore useless as a liveness signal.
+ */
+export function isMobileGpsDataStream(datastream: typeof DataStream): boolean {
+    const outputName = datastream?.properties?.outputName;
+    return typeof outputName === "string" && outputName.toLowerCase() === "location";
+}
+
+/** Kromek D5 1 Hz radiometric status report (live alarm-active booleans). */
+export function isD5RadiometricStatusDataStream(datastream: typeof DataStream): boolean {
+    return includesDefinition(getObservedDefinitions(datastream), D5_RAD_STATUS_DEF);
 }
 
 export function isVideoDataStream(datastream: typeof DataStream): boolean {
