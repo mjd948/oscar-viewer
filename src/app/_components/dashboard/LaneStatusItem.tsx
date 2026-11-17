@@ -195,11 +195,16 @@ function LaneStatusItem({
                         />
                     ))}
 
-                    <FaultIndicator laneName={health.laneName} kind="gamma-high" label={t("gammaHigh")} state={health.faults.gammaHigh} glyph="γ↑"/>
-                    <FaultIndicator laneName={health.laneName} kind="gamma-low" label={t("gammaLow")} state={health.faults.gammaLow} glyph="γ↓"/>
-                    <FaultIndicator laneName={health.laneName} kind="neutron-high" label={t("neutronHigh")} state={health.faults.neutronHigh} glyph="n↑"/>
-                    <FaultIndicator laneName={health.laneName} kind="tamper" label={t("tamper")} state={health.faults.tamper}/>
-                    <FaultIndicator laneName={health.laneName} kind="extended-occupancy" label={t("extendedOccupancy")} state={health.extendedOccupancy}/>
+                    {/* Portal-only telemetry: a mobile detector lane publishes none of it. */}
+                    {!health.mobile && (
+                        <>
+                            <FaultIndicator laneName={health.laneName} kind="gamma-high" label={t("gammaHigh")} state={health.faults.gammaHigh} glyph="γ↑"/>
+                            <FaultIndicator laneName={health.laneName} kind="gamma-low" label={t("gammaLow")} state={health.faults.gammaLow} glyph="γ↓"/>
+                            <FaultIndicator laneName={health.laneName} kind="neutron-high" label={t("neutronHigh")} state={health.faults.neutronHigh} glyph="n↑"/>
+                            <FaultIndicator laneName={health.laneName} kind="tamper" label={t("tamper")} state={health.faults.tamper}/>
+                            <FaultIndicator laneName={health.laneName} kind="extended-occupancy" label={t("extendedOccupancy")} state={health.extendedOccupancy}/>
+                        </>
+                    )}
                 </Stack>
             </Box>
 

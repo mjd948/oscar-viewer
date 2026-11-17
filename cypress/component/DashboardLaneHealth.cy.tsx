@@ -264,6 +264,39 @@ describe("dashboard lane health indicators", () => {
         }], now, 1)[0].extendedOccupancy).to.equal("clear");
     });
 
+    it("never derives portal faults or extended occupancy for a mobile detector lane", () => {
+        const now = Date.parse("2026-10-16T16:00:00.000Z");
+        // A walker in a ten-minute alarm episode: the node reports no fault and never
+        // monitors extended occupancy, and no portal fault stream ever answers.
+        const walker: LaneHealth = {
+            laneName: "Patrol 1",
+            nodeName: "Local Node",
+            rpm: {id: "rs350-1", label: "RS350", state: "online"},
+            cameras: [],
+            faults: {gammaHigh: "unknown", gammaLow: "unknown", neutronHigh: "unknown", tamper: "unknown"},
+            occupancyState: "occupied",
+            occupancyStartedAt: now - 10 * 60_000,
+            extendedOccupancyFault: false,
+            lastUpdatedAt: now,
+            mobile: true,
+        };
+        const [row] = deriveLaneHealthRows([walker], now, 1);
+        expect(row.extendedOccupancy).to.equal("clear");
+        expect(row.hasFault).to.equal(false);
+        expect(row.hasUnknownTelemetry).to.equal(false);
+
+        // The same lane without the mobile flag is the portal behaviour the flag must suppress.
+        const [portal] = deriveLaneHealthRows([{...walker, mobile: undefined}], now, 1);
+        expect(portal.extendedOccupancy).to.equal("active");
+        expect(portal.hasUnknownTelemetry).to.equal(true);
+
+        mountLane(laneRow({laneName: "Patrol 1", ...row}));
+        cy.get(connectionSelector("Patrol 1", "rpm", "rs350-1")).should("have.attr", "data-state", "online");
+        ["gamma-high", "gamma-low", "neutron-high", "tamper", "extended-occupancy"].forEach((kind) => {
+            cy.get(faultSelector("Patrol 1", kind)).should("not.exist");
+        });
+    });
+
     it("advances every occupied lane at its own threshold deadline", () => {
         const now = Date.parse("2026-10-16T16:00:00.000Z");
         cy.clock(now);

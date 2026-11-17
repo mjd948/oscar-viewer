@@ -54,6 +54,12 @@ export interface LaneHealth {
     deviceSilent?: boolean;
     /** Newest observation time (node clock, ms) across the lane's device heartbeat streams. */
     lastDeviceDataAt?: number | null;
+    /**
+     * Mobile detector lane (RS-350 / D5 walker). The node never monitors extended occupancy on these
+     * (a walker "occupancy" is an alarm episode that can legitimately run for minutes) and they publish
+     * no gamma-high/low, neutron-high or tamper telemetry, so those portal indicators do not apply.
+     */
+    mobile?: boolean;
 }
 
 export interface LaneHealthRow extends LaneHealth {
@@ -321,9 +327,12 @@ function buildLaneHealth(laneName: string, lane: LaneMapEntry): LaneHealth {
     );
     const rpmSystem = lane.systems.find((system: any) => systemId(system) === streamSystemId(rpmStream));
     const configuredThreshold = extractLaneThresholdMinutes(lane);
+    const mobile = lane.datastreams.some((stream: any) =>
+        isMobileGpsDataStream(stream) || isD5RadiometricStatusDataStream(stream));
 
     return {
         laneName,
+        ...(mobile ? {mobile: true} : {}),
         nodeName: lane.parentNode?.name ?? "",
         rpm: {
             id: systemId(rpmSystem) || streamSystemId(rpmStream) || `${laneName}-rpm`,
@@ -363,7 +372,9 @@ export function deriveLaneHealthRows(
         );
         const thresholdMilliseconds = laneThresholdMinutes * 60 * 1000;
         const occupancyDuration = lane.occupancyStartedAt == null ? 0 : Math.max(0, now - lane.occupancyStartedAt);
-        const extendedOccupancy: TelemetryState = lane.occupancyState === "unknown"
+        const extendedOccupancy: TelemetryState = lane.mobile
+            ? "clear"
+            : lane.occupancyState === "unknown"
             ? "unknown"
             : lane.occupancyState === "clear"
                 ? "clear"
@@ -372,11 +383,14 @@ export function deriveLaneHealthRows(
                     : lane.occupancyStartedAt == null
                         ? "unknown"
                         : occupancyDuration > thresholdMilliseconds ? "active" : "clear";
-        const hasFault = Object.values(lane.faults).includes("active") || extendedOccupancy === "active";
+        // Mobile lanes never receive the portal fault streams; their defaults ("unknown") must not
+        // mark the lane as unknown or faulted.
+        const portalFaults = lane.mobile ? [] : Object.values(lane.faults);
+        const hasFault = portalFaults.includes("active") || extendedOccupancy === "active";
         const hasOfflineComponent = lane.rpm.state === "offline" || lane.cameras.some((camera) => camera.state === "offline");
         const hasUnknownTelemetry = lane.rpm.state === "unknown"
             || lane.cameras.some((camera) => camera.state === "unknown")
-            || Object.values(lane.faults).includes("unknown")
+            || portalFaults.includes("unknown")
             || extendedOccupancy === "unknown";
         return {
             ...lane,

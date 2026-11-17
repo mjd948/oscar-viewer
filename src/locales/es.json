@@ -681,5 +681,6 @@
   "savedQueryCustomLabel": "Consulta filtrada",
   "savedQueriesEmptyHint": "Aplique un filtro o búsqueda de ID de vehículo para guardar un marcador de consulta.",
   "mobileNoDataSince": "Sin datos desde {time}",
-  "viewEvent": "VER EVENTO"
+  "viewEvent": "VER EVENTO",
+  "mobileFaultsNotMonitored": "Las fallas de portal y la ocupación prolongada no se supervisan en detectores móviles"
 }

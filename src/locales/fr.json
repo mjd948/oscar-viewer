@@ -681,5 +681,6 @@
   "savedQueryCustomLabel": "Requête filtrée",
   "savedQueriesEmptyHint": "Appliquez un filtre ou une recherche d'ID véhicule pour enregistrer un favori.",
   "mobileNoDataSince": "Aucune donnée depuis {time}",
-  "viewEvent": "VOIR L'ÉVÉNEMENT"
+  "viewEvent": "VOIR L'ÉVÉNEMENT",
+  "mobileFaultsNotMonitored": "Les défauts de portique et l’occupation prolongée ne sont pas surveillés sur les détecteurs mobiles"
 }
