@@ -247,6 +247,11 @@ export default function HLSVideoComponent({
 
             const playlistUrl = new URL(src, window.location.href);
             const hlsjsConfig = {
+                // hls.js builds its transmuxer worker by stringifying a bundled function into a
+                // blob; after webpack transpilation that code references helpers missing from the
+                // worker scope ("o is not defined"), throwing on every page that mounts video.
+                // hls.js already falls back to main-thread transmuxing; make that explicit.
+                enableWorker: false,
                 liveSyncDurationCount: 1,
                 liveMaxLatencyDurationCount: 3,
                 maxBufferLength: 10,
