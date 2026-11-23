@@ -158,6 +158,7 @@ export interface FederatedVehicleSearchResult {
     passes: VehiclePassItem[];
     summary: VehicleIncidentSummary;
     truncated: boolean;
+    limitPerNode?: number;
     unreachableNodes: UnreachableFederatedNode[];
 }
 
@@ -177,6 +178,8 @@ export interface SearchVehiclePassesOptions {
 
 const ISO_6346_NORMALIZED_RE = /^[A-Z]{3}[UJZR][0-9]{7}$/;
 const DEFAULT_SEARCH_TIMEOUT_MS = 30_000;
+export const DEFAULT_VEHICLE_SEARCH_LIMIT_PER_NODE = 200;
+export const LEGACY_FALLBACK_VEHICLE_SEARCH_LIMIT = 100;
 export const MAX_HYDRATED_PROFILE_PASSES = 16;
 
 export function normalizeVehicleId(raw: unknown): string {
@@ -645,8 +648,10 @@ async function fallbackLegacyConSysVehicleSearch(
     isRemoteNode: boolean,
     fetchImpl: typeof fetch,
     signal?: AbortSignal,
-): Promise<VehiclePassItem[]> {
-    if (dir.lanes.length === 0) return [];
+): Promise<{passes: VehiclePassItem[]; truncated: boolean; effectiveLimit: number}> {
+    if (dir.lanes.length === 0) {
+        return {passes: [], truncated: false, effectiveLimit: LEGACY_FALLBACK_VEHICLE_SEARCH_LIMIT};
+    }
     const ocrStreams: any[] = [];
     const adjStreams: any[] = [];
     for (const lane of dir.lanes) {
@@ -675,11 +680,14 @@ async function fallbackLegacyConSysVehicleSearch(
             matchedObsIds.add(obsId);
         }
     }
-    if (matchedObsIds.size === 0) return [];
+    if (matchedObsIds.size === 0) {
+        return {passes: [], truncated: false, effectiveLimit: LEGACY_FALLBACK_VEHICLE_SEARCH_LIMIT};
+    }
 
     const csEndpoint = dir.node.getConnectedSystemsEndpoint(false);
     const items: VehiclePassItem[] = [];
-    for (const obsId of Array.from(matchedObsIds).slice(0, 100)) {
+    const truncated = matchedObsIds.size > LEGACY_FALLBACK_VEHICLE_SEARCH_LIMIT;
+    for (const obsId of Array.from(matchedObsIds).slice(0, LEGACY_FALLBACK_VEHICLE_SEARCH_LIMIT)) {
         if (signal?.aborted) break;
         const resp = await fetchImpl(`${csEndpoint}/observations/${encodeURIComponent(obsId)}`, {
             method: "GET",
@@ -741,7 +749,7 @@ async function fallbackLegacyConSysVehicleSearch(
             ),
         );
     }
-    return items;
+    return {passes: items, truncated, effectiveLimit: LEGACY_FALLBACK_VEHICLE_SEARCH_LIMIT};
 }
 
 async function querySingleNodeVehiclePasses(
@@ -759,7 +767,7 @@ async function querySingleNodeVehiclePasses(
         fetchImpl: typeof fetch;
         signal?: AbortSignal;
     },
-): Promise<{passes: VehiclePassItem[]; truncated: boolean}> {
+): Promise<{passes: VehiclePassItem[]; truncated: boolean; effectiveLimit: number}> {
     const params = new URLSearchParams();
     if (options.rawVehicleId.trim()) {
         params.set("vehicleId", options.rawVehicleId.trim());
@@ -799,7 +807,7 @@ async function querySingleNodeVehiclePasses(
         });
 
         if (resp.status === 404 || resp.status === 405) {
-            const fallbackPasses = await fallbackLegacyConSysVehicleSearch(
+            return await fallbackLegacyConSysVehicleSearch(
                 dir,
                 options.normalizedVehicleId,
                 options.matchMode,
@@ -808,7 +816,6 @@ async function querySingleNodeVehiclePasses(
                 options.fetchImpl,
                 timeoutController.signal,
             );
-            return {passes: fallbackPasses, truncated: false};
         }
 
         if (!resp.ok) {
@@ -821,6 +828,7 @@ async function querySingleNodeVehiclePasses(
         return {
             passes: mapped,
             truncated: Boolean(payload?.truncated),
+            effectiveLimit: options.limitPerNode,
         };
     } finally {
         clearTimeout(timeoutId);
@@ -882,7 +890,7 @@ export async function searchVehiclePassesAcrossNodes(
     const matchMode: VehicleSearchMatchMode = options.matchMode
         ?? (normalizedVehicleId ? "equals" : "isNotEmpty");
     const fetchImpl = options.fetchImpl ?? fetch;
-    const limitPerNode = options.limitPerNode ?? 200;
+    const limitPerNode = options.limitPerNode ?? DEFAULT_VEHICLE_SEARCH_LIMIT_PER_NODE;
     const includeProfiles = Boolean(options.includeProfiles);
 
     if (
@@ -897,6 +905,7 @@ export async function searchVehiclePassesAcrossNodes(
             passes: [],
             summary: summarizeVehiclePasses([]),
             truncated: false,
+            limitPerNode,
             unreachableNodes: [],
         };
     }
@@ -936,11 +945,15 @@ export async function searchVehiclePassesAcrossNodes(
     const mergedByKey = new Map<string, VehiclePassItem>();
     const unreachableNodes: UnreachableFederatedNode[] = [];
     let truncated = false;
+    let effectiveLimitPerNode = limitPerNode;
 
     outcomes.forEach((outcome, index) => {
         const dir = directories[index];
         if (outcome.status === "fulfilled") {
-            if (outcome.value.truncated) truncated = true;
+            if (outcome.value.truncated) {
+                truncated = true;
+                effectiveLimitPerNode = Math.min(effectiveLimitPerNode, outcome.value.effectiveLimit);
+            }
             for (const pass of outcome.value.passes) {
                 if (!mergedByKey.has(pass.compositeKey)) {
                     mergedByKey.set(pass.compositeKey, pass);
@@ -969,6 +982,7 @@ export async function searchVehiclePassesAcrossNodes(
         passes,
         summary: summarizeVehiclePasses(passes),
         truncated,
+        limitPerNode: effectiveLimitPerNode,
         unreachableNodes,
     };
 }

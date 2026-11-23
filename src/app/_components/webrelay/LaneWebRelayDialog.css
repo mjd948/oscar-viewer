@@ -1,0 +1,317 @@
+/*
+ * Copyright (c) 2026. Botts Innovative Research, Inc.
+ * All Rights Reserved
+ */
+
+dialog.lane-webrelay-dialog {
+    margin: auto;
+    padding: 0;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 12px;
+    max-inline-size: min(56rem, calc(100vw - 1.5rem));
+    inline-size: 100%;
+    max-block-size: calc(100svh - 2rem);
+    color: #0f172a;
+    background-color: #ffffff;
+    box-shadow: 0 24px 56px rgba(15, 23, 42, 0.32);
+}
+
+dialog.lane-webrelay-dialog[open] {
+    display: flex;
+    flex-direction: column;
+}
+
+dialog.lane-webrelay-dialog:modal {
+    overscroll-behavior: contain;
+}
+
+dialog.lane-webrelay-dialog::backdrop {
+    overflow: hidden;
+    overscroll-behavior: contain;
+    background: rgba(15, 23, 42, 0.6);
+}
+
+.lane-webrelay-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-block-end: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.lane-webrelay-title {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1.3;
+}
+
+.lane-webrelay-subtitle {
+    margin: 0.25rem 0 0;
+    font-size: 0.85rem;
+    opacity: 0.78;
+}
+
+.lane-webrelay-body {
+    padding: 1rem 1.25rem 1.25rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.lane-webrelay-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.75rem 0.9rem;
+    border-radius: 8px;
+    background: rgba(148, 163, 184, 0.1);
+}
+
+.lane-webrelay-card {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 10px;
+    padding: 0.95rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.lane-webrelay-section-heading {
+    margin: 0;
+    font-size: 0.98rem;
+    font-weight: 700;
+}
+
+.lane-webrelay-units-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 0.75rem;
+}
+
+.lane-webrelay-unit-box {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 8px;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.lane-webrelay-unit-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.lane-webrelay-coils-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+}
+
+.lane-webrelay-coil-pill {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    padding: 0.35rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    font-size: 0.76rem;
+}
+
+.lane-webrelay-coil-pill[data-active="true"] {
+    border-color: #d97706;
+    background: rgba(245, 158, 11, 0.14);
+    font-weight: 700;
+}
+
+.lane-webrelay-coil-pill[data-alarm="true"] {
+    border-color: #dc2626;
+    background: rgba(220, 38, 38, 0.15);
+    font-weight: 700;
+}
+
+.lane-webrelay-actions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.lane-webrelay-btn {
+    min-block-size: 2.15rem;
+    min-inline-size: 2.15rem;
+    padding: 0.4rem 0.78rem;
+    border-radius: 7px;
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 0.83rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+}
+
+.lane-webrelay-btn:hover:not(:disabled) {
+    background: rgba(148, 163, 184, 0.14);
+}
+
+.lane-webrelay-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.lane-webrelay-btn-primary {
+    background: #1976d2;
+    border-color: #1976d2;
+    color: #ffffff;
+}
+
+.lane-webrelay-btn-primary:hover:not(:disabled) {
+    background: #1565c0;
+}
+
+.lane-webrelay-btn-gamma {
+    border-color: #dc2626;
+    color: #dc2626;
+}
+
+.lane-webrelay-btn-neutron {
+    border-color: #2563eb;
+    color: #2563eb;
+}
+
+.lane-webrelay-btn[aria-pressed="true"] {
+    background: #b45309;
+    border-color: #b45309;
+    color: #ffffff;
+}
+
+.lane-webrelay-dialog :where(button, input, select):focus-visible {
+    outline: 3px solid #1976d2;
+    outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+    .lane-webrelay-btn,
+    .lane-webrelay-field input,
+    .lane-webrelay-field select {
+        min-block-size: 2.75rem;
+    }
+}
+
+.lane-webrelay-fieldset {
+    margin: 0;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.lane-webrelay-fieldset legend {
+    padding: 0 0.35rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+.lane-webrelay-radio-option {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 0.55rem;
+    row-gap: 0.15rem;
+    align-items: start;
+}
+
+.lane-webrelay-radio-option input[type="radio"] {
+    margin-block-start: 0.22rem;
+    inline-size: 1.05rem;
+    block-size: 1.05rem;
+}
+
+.lane-webrelay-radio-desc {
+    grid-column: 2;
+    font-size: 0.78rem;
+    opacity: 0.78;
+}
+
+.lane-webrelay-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 0.85rem;
+}
+
+.lane-webrelay-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.lane-webrelay-field label {
+    font-size: 0.83rem;
+    font-weight: 600;
+}
+
+.lane-webrelay-hint {
+    font-size: 0.75rem;
+    opacity: 0.76;
+}
+
+.lane-webrelay-field input,
+.lane-webrelay-field select {
+    min-block-size: 2.15rem;
+    padding: 0.38rem 0.6rem;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.48);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 0.86rem;
+}
+
+.lane-webrelay-field input[aria-invalid="true"] {
+    border-color: #dc2626;
+}
+
+.lane-webrelay-checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    font-size: 0.85rem;
+}
+
+.lane-webrelay-checkbox-row input[type="checkbox"] {
+    margin-block-start: 0.18rem;
+    inline-size: 1.05rem;
+    block-size: 1.05rem;
+}
+
+.lane-webrelay-status-banner {
+    padding: 0.6rem 0.8rem;
+    border-radius: 7px;
+    font-size: 0.83rem;
+    border: 1px solid rgba(22, 163, 74, 0.45);
+    background: rgba(22, 163, 74, 0.12);
+}
+
+.lane-webrelay-error-banner {
+    padding: 0.6rem 0.8rem;
+    border-radius: 7px;
+    font-size: 0.83rem;
+    border: 1px solid rgba(220, 38, 38, 0.5);
+    background: rgba(220, 38, 38, 0.12);
+}

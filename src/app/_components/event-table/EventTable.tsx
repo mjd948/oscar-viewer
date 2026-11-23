@@ -31,11 +31,14 @@ import {
     useGridApiRef,
     GridRowParams,
     GridRowSelectionModel,
+    GridSortModel,
 } from "@mui/x-data-grid";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import CompareArrowsRoundedIcon from "@mui/icons-material/CompareArrowsRounded";
 import ClearRoundedIcon from "@mui/icons-material/ClearRounded";
+import LayersRoundedIcon from "@mui/icons-material/LayersRounded";
+import dynamic from "next/dynamic";
 import DataStream from "osh-js/source/core/sweapi/datastream/DataStream.js";
 import ObservationFilter from "osh-js/source/core/sweapi/observation/ObservationFilter";
 import Observations from "osh-js/source/core/consysapi/observation/Observations";
@@ -48,7 +51,7 @@ import {
     LaneMapEntry,
     type SharedConnectionLease,
 } from "@/lib/data/oscar/LaneCollection";
-import {EventTableData, sortEventsByAlarmPriority} from "@/lib/data/oscar/TableHelpers";
+import {EventTableData, sortEventsByAlarmPriority, sortEventsByTimeDesc} from "@/lib/data/oscar/TableHelpers";
 import {
     adjudicationCodeMarker,
     AdjudicationCodes,
@@ -56,10 +59,14 @@ import {
 import {
     extractLatestAdjudicationCode,
     hasEmlNonThreatMarker,
+    hasExtendedOccupancyGammaMarker,
 } from "@/lib/data/oscar/adjudication/EmlMetadata";
 import {
     buildUpSetCoOccurrenceFromEvents,
     computeEventUpSetMask,
+    isUpSetFilterValidForData,
+    matchesUpSetFilter,
+    UpSetFilterSelection,
 } from "@/lib/data/oscar/adjudication/IsotopeMapping";
 import UpSetPlot from "@/app/_components/common/UpSetPlot";
 import {useCustomAdjudicationCodes} from "@/app/hooks/useCustomAdjudicationCodes";
@@ -115,6 +122,18 @@ import {
 } from "@/lib/data/oscar/EventFilter";
 import VehiclePassComparisonDialog from "@/app/_components/vehicle/VehiclePassComparisonDialog";
 import {
+    extractUffUuidFromOmniboxInput,
+    fetchActiveCargoUffInfo,
+    searchCargoUff,
+    UffSearchMatch,
+} from "@/lib/data/oscar/CargoUffApi";
+
+const CargoUffViewerDialog = dynamic(
+    () => import("@/app/_components/uff/CargoUffViewerDialog"),
+    {ssr: false},
+);
+import {
+    DEFAULT_VEHICLE_SEARCH_LIMIT_PER_NODE,
     FederatedVehicleSearchResult,
     normalizeVehicleId,
     searchVehiclePassesAcrossNodes,
@@ -232,6 +251,12 @@ export default function EventTable({
     const effectiveUnreadOnly = isAlarmTable && unreadOnly;
     const lastHandledAckNonceRef = useRef(dashboardAcknowledgeNonce);
     const [ackStatusMessage, setAckStatusMessage] = useState("");
+    const [sortByTimeOnly, setSortByTimeOnly] = useState(false);
+    const supportsSortByTimeToggle = isAlarmTable || isEventLog;
+    const effectiveSortByTimeOnly = supportsSortByTimeToggle && sortByTimeOnly;
+    const effectiveSortByTimeOnlyRef = useRef(effectiveSortByTimeOnly);
+    effectiveSortByTimeOnlyRef.current = effectiveSortByTimeOnly;
+    const [sortModel, setSortModel] = useState<GridSortModel>([{field: "status", sort: "asc"}]);
     const [timeWindowPreset, setTimeWindowPreset] = useState<AlarmTimeWindowPreset>("15d");
     const activeAlarmWindowMs = isAlarmTable
         ? ALARM_TIME_WINDOW_PRESET_MS[timeWindowPreset]
@@ -273,7 +298,7 @@ export default function EventTable({
     }));
     const [columnVisibilityModel, setColumnVisibilityModel] = useState<GridColumnVisibilityModel>(() => ({
         adjudicatedIds: viewAdjudicated,
-        adjudicationCode: false,
+        adjudicationCode: viewAdjudicated,
         vehicleId: Boolean(initialHydration?.criteria.vehicleSearch),
         ...(columnSettings ? visibilityFromColumnSettings(columnSettings) : {}),
     }));
@@ -281,7 +306,11 @@ export default function EventTable({
     const [syncedViewAdjudicated, setSyncedViewAdjudicated] = useState(viewAdjudicated);
     if (syncedViewAdjudicated !== viewAdjudicated) {
         setSyncedViewAdjudicated(viewAdjudicated);
-        setColumnVisibilityModel(previous => ({...previous, adjudicatedIds: viewAdjudicated}));
+        setColumnVisibilityModel(previous => ({
+            ...previous,
+            adjudicatedIds: viewAdjudicated,
+            adjudicationCode: viewAdjudicated,
+        }));
     }
     const [filterEpoch, setFilterEpoch] = useState(0);
     const [filter, setFilter] = useState<EventFilterGroup>(
@@ -332,6 +361,12 @@ export default function EventTable({
         highlightObsId?: string | null;
         initialResult?: FederatedVehicleSearchResult | null;
     } | null>(null);
+    const [uffOmniboxMatches, setUffOmniboxMatches] = useState<UffSearchMatch[]>([]);
+    const [eventLogUffViewerUuid, setEventLogUffViewerUuid] = useState<string | null>(null);
+    const primaryEventLogNode = useMemo(
+        () => Array.from(stableLaneMap.values())[0]?.parentNode ?? null,
+        [stableLaneMap],
+    );
 
     const filterVehicleRule = useMemo(() => extractPrimaryVehicleIdRule(filter), [filter]);
     const hasFilterVehicleRule = useMemo(() => hasVehicleIdFilterRule(filter), [filter]);
@@ -683,6 +718,12 @@ export default function EventTable({
     }, [stableLaneMap, tableMode, currentLane]);
 
     const pageQueryPlans = useMemo<QueryPlan[]>(() => {
+        if (effectiveSortByTimeOnly) {
+            return queryPlans.map(plan => ({
+                ...plan,
+                key: `${plan.key}\u001ftime-desc`,
+            }));
+        }
         const priorities = tableMode === "alarmtable"
             ? EVENT_PRIORITY_FILTERS.slice(0, 3)
             : EVENT_PRIORITY_FILTERS;
@@ -691,7 +732,7 @@ export default function EventTable({
             key: `${plan.key}\u001f${priorityFilter}`,
             filter: combineServerFilters(plan.filter, priorityFilter),
         })));
-    }, [queryPlans, tableMode]);
+    }, [effectiveSortByTimeOnly, queryPlans, tableMode]);
 
     const bulkQueryPlans = useMemo<QueryPlan[]>(() => queryPlans.map(plan => ({
         ...plan,
@@ -831,6 +872,7 @@ export default function EventTable({
         pageQueryError,
         currentPageRef,
         getCachedBucketCounts,
+        invalidatePrefetch,
         fetchPlanCount,
         refreshCounts,
         fetchPage,
@@ -838,14 +880,16 @@ export default function EventTable({
         queryPlans: effectiveQueryPlans,
         pageQueryPlans: effectivePageQueryPlans,
         page: paginationModel.page,
-        pageSize: PAGE_SIZE,
+        pageSize: paginationModel.pageSize,
         pageLoadedTime,
         phenomenonTimeForCutoff,
         rowFilter: isRowUnread,
+        sortComparator: effectiveSortByTimeOnly ? sortEventsByTimeDesc : sortEventsByAlarmPriority,
         extraFetchRows: effectiveUnreadOnly ? postWatermarkReadKeysSummary.totalEstimatedCount : 0,
         filterModeActive: effectiveUnreadOnly,
         disjointPriorityPlans: !hasRS350Lane && effectiveQueryPlans.length === 1 && effectivePageQueryPlans.length > 1,
         prewarmBucketCounts: !hasRS350Lane && effectiveQueryPlans.length === 1 && effectivePageQueryPlans.length > 1,
+        prefetchNextPage: true,
         cachedSnapshot: isEventLog ? restoredSnapshot : null,
         fetchPlanRows,
     });
@@ -984,13 +1028,14 @@ export default function EventTable({
                         }
                     }
                     if (!rowPassesLocalFilters(event, lane)) return;
+                    invalidatePrefetch();
                     if (allFilteredCutoffRef.current && event.status !== "None" && !event.adjudicatedIds?.length) {
                         setPostSelectionKeys(previous => new Set(previous).add(eventSelectionKey(event)));
                     }
                     setRowCount(previous => previous + 1);
                     if (currentPageRef.current !== 0) return;
                     setRows(previous => deduplicateEvents([event, ...previous])
-                        .sort(sortEventsByAlarmPriority)
+                        .sort(effectiveSortByTimeOnlyRef.current ? sortEventsByTimeDesc : sortEventsByAlarmPriority)
                         .slice(0, PAGE_SIZE));
                 } catch (error) {
                     console.error("Error processing live occupancy event", error);
@@ -1022,6 +1067,7 @@ export default function EventTable({
         advanceSnapshotCutoff,
         currentPageRef,
         filter,
+        invalidatePrefetch,
         isAlarmTable,
         setRowCount,
         setRows,
@@ -1029,6 +1075,7 @@ export default function EventTable({
 
     useEffect(() => {
         if (!adjudicatedEventId || tableMode !== "alarmtable") return;
+        invalidatePrefetch();
         setRows(previous => previous.filter(row => row.id !== adjudicatedEventId));
         setRowCount(previous => Math.max(0, previous - 1));
         setUnreadReconcileEpoch(previous => previous + 1);
@@ -1036,23 +1083,35 @@ export default function EventTable({
         const cutoff = advanceSnapshotCutoff();
         void refreshCounts(cutoff);
         void fetchPage(currentPageRef.current, cutoff);
-    }, [adjudicatedEventId, tableMode, dispatch, advanceSnapshotCutoff, refreshCounts, fetchPage, currentPageRef, setRowCount, setRows]);
+    }, [adjudicatedEventId, tableMode, dispatch, advanceSnapshotCutoff, invalidatePrefetch, refreshCounts, fetchPage, currentPageRef, setRowCount, setRows]);
 
     useEffect(() => {
         if (stableLaneMap.size === 0) return;
-        const reconcileAfterReconnect = () => {
+        const reconcileAfterReconnect = (evt?: Event) => {
+            const resetForSandbox =
+                evt instanceof CustomEvent && Boolean(evt.detail?.resetForSandboxInjection);
+            invalidatePrefetch();
+            if (resetForSandbox) {
+                restoredSnapshotRef.current = null;
+                setRestoredSnapshot(null);
+                if (currentPageRef.current !== 0) {
+                    setPaginationModel(previous => ({...previous, page: 0}));
+                }
+            }
             const cutoff = advanceSnapshotCutoff();
             setUnreadReconcileEpoch(previous => previous + 1);
             void refreshCounts(cutoff);
-            if (currentPageRef.current === 0) {
+            if (resetForSandbox || currentPageRef.current === 0) {
                 void fetchPage(0, cutoff);
             }
         };
         window.addEventListener("online", reconcileAfterReconnect);
+        window.addEventListener("oscar:sandbox-events-mutated", reconcileAfterReconnect);
         return () => {
             window.removeEventListener("online", reconcileAfterReconnect);
+            window.removeEventListener("oscar:sandbox-events-mutated", reconcileAfterReconnect);
         };
-    }, [stableLaneMap.size, advanceSnapshotCutoff, refreshCounts, fetchPage, currentPageRef]);
+    }, [stableLaneMap.size, advanceSnapshotCutoff, invalidatePrefetch, refreshCounts, fetchPage, currentPageRef]);
 
     const clearSelection = useCallback(() => {
         setSelectedKeys(new Set());
@@ -1089,6 +1148,21 @@ export default function EventTable({
         dispatch(toggleDashboardUnreadOnly());
     }, [dispatch]);
 
+    const handleToggleSortByTimeOnly = useCallback(() => {
+        const next = !sortByTimeOnly;
+        restoredSnapshotRef.current = null;
+        setRestoredSnapshot(null);
+        setSortByTimeOnly(next);
+        setSortModel(next ? [{field: "startTime", sort: "desc"}] : [{field: "status", sort: "asc"}]);
+        setPaginationModel(previous => (previous.page === 0 ? previous : {...previous, page: 0}));
+        setFilterEpoch(previous => previous + 1);
+        setAckStatusMessage(
+            next
+                ? t(isAlarmTable ? "dashboardSortedByTimeAnnouncement" : "eventsSortedByTimeAnnouncement")
+                : t(isAlarmTable ? "dashboardSortedByPriorityAnnouncement" : "eventsSortedByPriorityAnnouncement"),
+        );
+    }, [isAlarmTable, sortByTimeOnly, t]);
+
     const timeWindowOptions = useMemo<ToolbarTimeWindowOption[]>(
         () => [
             {value: "15m", label: t("timeWindow15m")},
@@ -1104,9 +1178,45 @@ export default function EventTable({
             setVehicleSearchResult(null);
             setVehicleSearchLoading(false);
             setVehicleSearchError(null);
+            setUffOmniboxMatches([]);
             return;
         }
-        if (stableLaneMap.size === 0) return;
+
+        const controller = new AbortController();
+        const omniboxUffUuid = isEventLog ? extractUffUuidFromOmniboxInput(activeVehicleQuery.vehicleId) : "";
+
+        // When in Event Log and a search is explicitly active, query Cargo UFF if enabled on the node.
+        // Zero requests are issued when no search is submitted or when Cargo UFF is disabled.
+        const uffLookupPromise: Promise<UffSearchMatch[]> = isEventLog
+            ? fetchActiveCargoUffInfo(primaryEventLogNode)
+                .then(async info => {
+                    if (!info.enabled || controller.signal.aborted) return [];
+                    const uffRes = await searchCargoUff(
+                        omniboxUffUuid
+                            ? {uffId: activeVehicleQuery.vehicleId, limit: 5}
+                            : {
+                                vehicleId: activeVehicleQuery.vehicleId,
+                                windowMinutes: 0,
+                                fuzzy: true,
+                                limit: 5,
+                            },
+                        primaryEventLogNode,
+                        controller.signal,
+                    );
+                    return uffRes.matches ?? [];
+                })
+                .catch((): UffSearchMatch[] => [])
+            : Promise.resolve([]);
+
+        void uffLookupPromise.then(matches => {
+            if (!controller.signal.aborted) {
+                setUffOmniboxMatches(matches);
+            }
+        });
+
+        if (stableLaneMap.size === 0) {
+            return () => controller.abort();
+        }
 
         const snapVehicle = isEventLog ? restoredSnapshotRef.current?.vehicleSearchResult : null;
         if (snapVehicle) {
@@ -1116,10 +1226,9 @@ export default function EventTable({
             setVehicleSearchResult(snapVehicle);
             setVehicleSearchLoading(false);
             setVehicleSearchError(null);
-            return;
+            return () => controller.abort();
         }
 
-        const controller = new AbortController();
         setVehicleSearchLoading(true);
         setVehicleSearchError(null);
 
@@ -1128,33 +1237,69 @@ export default function EventTable({
                 ? null
                 : new Date(Date.now() - VEHICLE_SEARCH_WINDOW_MS[activeVehicleQuery.window]).toISOString();
 
-        void searchVehiclePassesAcrossNodes({
-            vehicleId: activeVehicleQuery.vehicleId,
-            matchMode: activeVehicleQuery.matchMode,
-            laneMap: stableLaneMap,
-            activeViewKey,
-            startTimeIso,
-            signal: controller.signal,
-        })
-            .then((res) => {
+        void (async () => {
+            try {
+                let effectiveVehicleId = activeVehicleQuery.vehicleId;
+                let effectiveMatchMode = activeVehicleQuery.matchMode;
+                if (omniboxUffUuid) {
+                    const uffMatches = await uffLookupPromise;
+                    if (controller.signal.aborted) return;
+                    if (uffMatches.length > 0) {
+                        const correlatedId = uffMatches[0]?.displayVehicleIds?.[0];
+                        if (correlatedId) {
+                            effectiveVehicleId = correlatedId;
+                            effectiveMatchMode = "equals";
+                        } else {
+                            setVehicleSearchResult({
+                                rawVehicleId: activeVehicleQuery.vehicleId,
+                                normalizedVehicleId: normalizeVehicleId(activeVehicleQuery.vehicleId),
+                                formattedVehicleId: uffMatches[0]!.archiveFileName || omniboxUffUuid,
+                                matchMode: activeVehicleQuery.matchMode,
+                                passes: [],
+                                summary: {
+                                    totalPasses: 0,
+                                    alarmingPasses: 0,
+                                    openAlarmPasses: 0,
+                                    emlAutoReleasePasses: 0,
+                                    spectroscopicPasses: 0,
+                                    distinctLanes: 0,
+                                    distinctNodes: 0,
+                                    confirmedIsotopes: [],
+                                    latestDisposition: "",
+                                },
+                                truncated: false,
+                                unreachableNodes: [],
+                            });
+                            return;
+                        }
+                    }
+                }
+
+                const res = await searchVehiclePassesAcrossNodes({
+                    vehicleId: effectiveVehicleId,
+                    matchMode: effectiveMatchMode,
+                    laneMap: stableLaneMap,
+                    activeViewKey,
+                    startTimeIso,
+                    signal: controller.signal,
+                });
                 if (controller.signal.aborted) return;
                 for (const pass of res.passes) {
                     cacheEventBounded(eventSelectionKey(pass.eventRow), pass.eventRow);
                 }
                 setVehicleSearchResult(res);
-            })
-            .catch((err) => {
+            } catch (err) {
                 if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) return;
                 setVehicleSearchError(err instanceof Error ? err.message : String(err));
-            })
-            .finally(() => {
+            } finally {
                 if (!controller.signal.aborted) {
                     setVehicleSearchLoading(false);
                 }
-            });
+            }
+        })();
 
         return () => controller.abort();
-    }, [activeVehicleQuery, activeViewKey, cacheEventBounded, stableLaneMap]);
+    }, [activeVehicleQuery, activeViewKey, cacheEventBounded, isEventLog, primaryEventLogNode, stableLaneMap]);
 
     const vehicleFilteredRows = useMemo<EventTableData[]>(() => {
         if (!isVehicleSearchMode || !vehicleSearchResult) return [];
@@ -1222,6 +1367,7 @@ export default function EventTable({
         setSubmittedVehicleQuery(null);
         setVehicleSearchResult(null);
         setVehicleSearchError(null);
+        setUffOmniboxMatches([]);
         setPaginationModel(previous => (previous.page === 0 ? previous : {...previous, page: 0}));
         clearSelection();
     }, [activeViewKey, clearSelection, filter, isEventLog]);
@@ -1479,6 +1625,9 @@ export default function EventTable({
             const wasUnread = isRowUnread(event);
             markEventsRead([event], resolveEventNodeId);
             if (wasUnread) {
+                if (effectiveUnreadOnly) {
+                    invalidatePrefetch();
+                }
                 setScopedUnreadSummary({
                     count: effectiveUnreadSummary.capped
                         ? effectiveUnreadSummary.count
@@ -1845,10 +1994,29 @@ export default function EventTable({
         return new Date(Math.max(0, baseMs - 86_400_000)).toISOString();
     }, [pageLoadedTime, rows, wantsVehicleIdColumn]);
 
+    const ocrWindowEndIso = useMemo(() => {
+        if (!wantsVehicleIdColumn || paginationModel.page === 0 || rows.length === 0) {
+            return null;
+        }
+        let latestMs = Number.NEGATIVE_INFINITY;
+        for (const row of rows) {
+            const ms = Date.parse(row.endTime || row.startTime);
+            if (Number.isFinite(ms) && ms > latestMs) {
+                latestMs = ms;
+            }
+        }
+        if (!Number.isFinite(latestMs)) {
+            return null;
+        }
+        const paddedUpperMs = Math.ceil((latestMs + 15 * 60_000) / 900_000) * 900_000;
+        return new Date(paddedUpperMs).toISOString();
+    }, [paginationModel.page, rows, wantsVehicleIdColumn]);
+
     const {ocrByObsId, adjudicatedVehicleIdByObsId} = useVehicleOcrMap({
         enabled: wantsVehicleIdColumn && !isVehicleSearchMode,
         lanes: visibleOcrLanes,
         windowStartIso: ocrWindowStartIso,
+        windowEndIso: ocrWindowEndIso,
     });
 
     const pendingQuietResolutionIdsRef = useRef<Set<string>>(new Set());
@@ -1920,7 +2088,7 @@ export default function EventTable({
     }, [enrichRowsWithVehicleId, isVehicleSearchMode, rows, vehiclePageRows]);
 
     const [upSetExpanded, setUpSetExpanded] = useState(false);
-    const [selectedUpSetMask, setSelectedUpSetMask] = useState<number | null>(null);
+    const [selectedUpSetFilter, setSelectedUpSetFilter] = useState<UpSetFilterSelection | null>(null);
     const [upSetRefreshNonce, setUpSetRefreshNonce] = useState(0);
     const [upSetFetchState, setUpSetFetchState] = useState<{
         loading: boolean;
@@ -1994,9 +2162,10 @@ export default function EventTable({
                 setSubmittedVehicleQuery(null);
                 setVehicleSearchResult(null);
                 setVehicleSearchError(null);
+                setUffOmniboxMatches([]);
             }
             setUpSetExpanded(false);
-            setSelectedUpSetMask(null);
+            setSelectedUpSetFilter(null);
             setUpSetFetchState({loading: false, error: false, events: [], totalAlarmCount: 0, capped: false});
             clearSelection();
             setFilterEpoch(previous => previous + 1);
@@ -2242,27 +2411,27 @@ export default function EventTable({
     const upSetSummaryLoading = isEventLog && upSetExpanded && (isVehicleSearchMode ? vehicleSearchLoading : upSetFetchState.loading);
 
     useEffect(() => {
-        if (selectedUpSetMask == null) return;
+        if (selectedUpSetFilter == null) return;
         if (!upSetExpanded) {
-            setSelectedUpSetMask(null);
+            setSelectedUpSetFilter(null);
             return;
         }
-        if (!upSetSummaryLoading && (!eventLogUpSetData || !eventLogUpSetData.intersections.some(col => col.mask === selectedUpSetMask))) {
-            setSelectedUpSetMask(null);
+        if (!upSetSummaryLoading && !isUpSetFilterValidForData(eventLogUpSetData, selectedUpSetFilter)) {
+            setSelectedUpSetFilter(null);
         }
-    }, [eventLogUpSetData, selectedUpSetMask, upSetExpanded, upSetSummaryLoading]);
+    }, [eventLogUpSetData, selectedUpSetFilter, upSetExpanded, upSetSummaryLoading]);
 
     const upSetMatchedRows = useMemo<EventTableData[]>(() => {
-        if (!isEventLog || !upSetExpanded || selectedUpSetMask == null) return [];
-        return upSetSourceEvents.filter(row => computeEventUpSetMask(row) === selectedUpSetMask);
-    }, [isEventLog, selectedUpSetMask, upSetExpanded, upSetSourceEvents]);
+        if (!isEventLog || !upSetExpanded || selectedUpSetFilter == null) return [];
+        return upSetSourceEvents.filter(row => matchesUpSetFilter(computeEventUpSetMask(row), selectedUpSetFilter));
+    }, [isEventLog, selectedUpSetFilter, upSetExpanded, upSetSourceEvents]);
 
     const effectiveDisplayRows = useMemo<EventTableData[]>(() => {
-        if (!isEventLog || !upSetExpanded || selectedUpSetMask == null) return displayRows;
+        if (!isEventLog || !upSetExpanded || selectedUpSetFilter == null) return displayRows;
         const startIdx = paginationModel.page * PAGE_SIZE;
         const sliced = upSetMatchedRows.slice(startIdx, startIdx + PAGE_SIZE);
         return isVehicleSearchMode ? sliced : enrichRowsWithVehicleId(sliced);
-    }, [displayRows, enrichRowsWithVehicleId, isEventLog, isVehicleSearchMode, paginationModel.page, selectedUpSetMask, upSetExpanded, upSetMatchedRows]);
+    }, [displayRows, enrichRowsWithVehicleId, isEventLog, isVehicleSearchMode, paginationModel.page, selectedUpSetFilter, upSetExpanded, upSetMatchedRows]);
 
     const renderCompactHeader = useCallback((label: string) => {
         const unitMatch = label.match(/^(.*?)\s*(\([^)]+\))$/);
@@ -2475,17 +2644,19 @@ export default function EventTable({
             renderHeader: () => renderCompactHeader(t("adjudicated")),
             valueFormatter: (value: any) => hasEmlNonThreatMarker(value)
                 ? t("emlNonThreat")
-                : (value?.length > 0 ? t("yes") : t("no")),
+                : hasExtendedOccupancyGammaMarker(value)
+                    ? "Code 9998"
+                    : (value?.length > 0 ? t("yes") : t("no")),
             renderCell: params => {
-                const isEml = hasEmlNonThreatMarker(params.value);
-                const isYes = !isEml && (params.value?.length ?? 0) > 0;
+                const isAuto = hasEmlNonThreatMarker(params.value) || hasExtendedOccupancyGammaMarker(params.value);
+                const isYes = !isAuto && (params.value?.length ?? 0) > 0;
                 return (
                     <Box
                         component="span"
                         sx={{
                             fontSize: "0.8rem",
-                            fontWeight: isEml || isYes ? 600 : 400,
-                            color: isEml ? "info.main" : isYes ? "success.main" : "text.secondary",
+                            fontWeight: isAuto || isYes ? 600 : 400,
+                            color: isAuto ? "info.main" : isYes ? "success.main" : "text.secondary",
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
@@ -2630,6 +2801,7 @@ export default function EventTable({
         .map(column => column.field);
 
     const retryEventQueries = () => {
+        invalidatePrefetch();
         restoredSnapshotRef.current = null;
         setRestoredSnapshot(null);
         const cutoff = advanceSnapshotCutoff();
@@ -2650,7 +2822,7 @@ export default function EventTable({
         return new Date(Date.now() - VEHICLE_SEARCH_WINDOW_MS[activeVehicleQuery.window]).toISOString();
     }, [activeVehicleQuery]);
 
-    const isUpSetMaskFiltered = isEventLog && upSetExpanded && selectedUpSetMask != null;
+    const isUpSetMaskFiltered = isEventLog && upSetExpanded && selectedUpSetFilter != null;
     const tableRowCount = isUpSetMaskFiltered
         ? upSetMatchedRows.length
         : (isVehicleSearchMode ? vehicleFilteredRows.length : effectiveRowCount);
@@ -2658,7 +2830,7 @@ export default function EventTable({
 
     return (
         <Box sx={{display: "flex", flexDirection: "column", ...(fillHeight ? {height: "100%"} : isEventLog ? {minHeight: 860} : {height: 800}), width: "100%"}}>
-            {isAlarmTable && (
+            {supportsSortByTimeToggle && (
                 <Box
                     role="status"
                     aria-live="polite"
@@ -2706,7 +2878,7 @@ export default function EventTable({
                                 autoCorrect: "off",
                                 autoCapitalize: "none",
                                 spellCheck: false,
-                                maxLength: 64,
+                                maxLength: 260,
                                 "data-testid": "vehicle-id-search-input",
                             }}
                             sx={{
@@ -2775,7 +2947,7 @@ export default function EventTable({
                                 {t("clear")}
                             </Button>
                         )}
-                        {isVehicleSearchMode && vehicleSearchResult && (
+                        {(isVehicleSearchMode && (vehicleSearchResult || uffOmniboxMatches.length > 0)) && (
                             <Stack
                                 direction="row"
                                 spacing={1}
@@ -2784,18 +2956,53 @@ export default function EventTable({
                                 flexWrap="wrap"
                                 sx={{ml: {md: "auto"}}}
                             >
-                                <Chip
-                                    size="small"
-                                    color={vehicleFilteredRows.length > 0 ? "primary" : "default"}
-                                    variant="outlined"
-                                    label={t("vehicleSearchSummaryChip", {
-                                        passes: vehicleFilteredRows.length,
-                                        lanes: vehicleSearchResult.summary.distinctLanes,
-                                        nodes: vehicleSearchResult.summary.distinctNodes,
-                                    })}
-                                    data-testid="vehicle-search-summary-chip"
-                                />
-                                {vehicleSearchResult.passes.length > 0 && (
+                                {uffOmniboxMatches.length > 0 && (
+                                    <Stack
+                                        direction="row"
+                                        spacing={0.75}
+                                        alignItems="center"
+                                        useFlexGap
+                                        flexWrap="wrap"
+                                        data-testid="event-log-uff-match-strip"
+                                    >
+                                        <Chip
+                                            size="small"
+                                            color="secondary"
+                                            variant="outlined"
+                                            label={t("uffOmniboxMatchedChip", {
+                                                version: uffOmniboxMatches[0]!.uffVersion,
+                                                scanner: uffOmniboxMatches[0]!.scannerId || "NII",
+                                                count: uffOmniboxMatches.length,
+                                            })}
+                                            data-testid="event-log-uff-match-chip"
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="contained"
+                                            color="primary"
+                                            size="small"
+                                            startIcon={<LayersRoundedIcon />}
+                                            onClick={() => setEventLogUffViewerUuid(uffOmniboxMatches[0]!.uffUuid)}
+                                            data-testid="event-log-open-uff-btn"
+                                        >
+                                            {t("openCargoXray")}
+                                        </Button>
+                                    </Stack>
+                                )}
+                                {vehicleSearchResult && (
+                                    <Chip
+                                        size="small"
+                                        color={vehicleFilteredRows.length > 0 ? "primary" : "default"}
+                                        variant="outlined"
+                                        label={t("vehicleSearchSummaryChip", {
+                                            passes: vehicleFilteredRows.length,
+                                            lanes: vehicleSearchResult.summary.distinctLanes,
+                                            nodes: vehicleSearchResult.summary.distinctNodes,
+                                        })}
+                                        data-testid="vehicle-search-summary-chip"
+                                    />
+                                )}
+                                {vehicleSearchResult && vehicleSearchResult.passes.length > 0 && (
                                     <Button
                                         type="button"
                                         variant="contained"
@@ -2833,11 +3040,25 @@ export default function EventTable({
                             })}
                         </Alert>
                     )}
+                    {isVehicleSearchMode && vehicleSearchResult?.truncated && (
+                        <Alert
+                            severity="info"
+                            role="status"
+                            data-testid="vehicle-search-truncated-notice"
+                            sx={{mt: 1, "& .MuiAlert-message": {textWrap: "pretty"}}}
+                        >
+                            {t("vehicleSearchTruncatedNotice", {
+                                limit: (vehicleSearchResult.limitPerNode ?? DEFAULT_VEHICLE_SEARCH_LIMIT_PER_NODE).toLocaleString(locale),
+                                shown: vehicleFilteredRows.length.toLocaleString(locale),
+                            })}
+                        </Alert>
+                    )}
                 </Box>
             )}
             {!isEventLog && isVehicleSearchMode && vehicleSearchResult && vehicleSearchResult.passes.length > 0 && (
                 <Alert
                     severity="info"
+                    role="status"
                     sx={{mb: 1}}
                     action={
                         <Button
@@ -2860,11 +3081,28 @@ export default function EventTable({
                         </Button>
                     }
                 >
-                    {t("vehicleSearchSummaryChip", {
-                        passes: vehicleFilteredRows.length,
-                        lanes: vehicleSearchResult.summary.distinctLanes,
-                        nodes: vehicleSearchResult.summary.distinctNodes,
-                    })}
+                    <Stack spacing={0.25}>
+                        <span>
+                            {t("vehicleSearchSummaryChip", {
+                                passes: vehicleFilteredRows.length,
+                                lanes: vehicleSearchResult.summary.distinctLanes,
+                                nodes: vehicleSearchResult.summary.distinctNodes,
+                            })}
+                        </span>
+                        {vehicleSearchResult.truncated && (
+                            <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                data-testid="vehicle-search-truncated-notice"
+                                sx={{textWrap: "pretty"}}
+                            >
+                                {t("vehicleSearchTruncatedNotice", {
+                                    limit: (vehicleSearchResult.limitPerNode ?? DEFAULT_VEHICLE_SEARCH_LIMIT_PER_NODE).toLocaleString(locale),
+                                    shown: vehicleFilteredRows.length.toLocaleString(locale),
+                                })}
+                            </Typography>
+                        )}
+                    </Stack>
                 </Alert>
             )}
             {(countQueryError || pageQueryError) && !isVehicleSearchMode && (
@@ -2888,8 +3126,8 @@ export default function EventTable({
                             setUpSetFetchState(previous => ({...previous, loading: true, error: false}));
                         }
                         setUpSetExpanded(nextOpen);
-                        if (!nextOpen && selectedUpSetMask !== null) {
-                            setSelectedUpSetMask(null);
+                        if (!nextOpen && selectedUpSetFilter !== null) {
+                            setSelectedUpSetFilter(null);
                             setPaginationModel(previous => (previous.page === 0 ? previous : {...previous, page: 0}));
                         }
                     }}
@@ -2974,9 +3212,9 @@ export default function EventTable({
                                     )}
                                     <UpSetPlot
                                         data={eventLogUpSetData}
-                                        selectedMask={selectedUpSetMask}
-                                        onSelectIntersection={col => {
-                                            setSelectedUpSetMask(col?.mask ?? null);
+                                        selectedFilter={selectedUpSetFilter}
+                                        onSelectFilter={nextFilter => {
+                                            setSelectedUpSetFilter(nextFilter);
                                             setPaginationModel(previous => (
                                                 previous.page === 0 ? previous : {...previous, page: 0}
                                             ));
@@ -3060,6 +3298,13 @@ export default function EventTable({
                             onSelectAllFiltered: selectAllFilteredAlarms,
                             onClearSelection: clearSelection,
                             onBulkAdjudicate: () => setBulkDialogOpen(true),
+                            ...(supportsSortByTimeToggle
+                                ? {
+                                    sortByTimeOnly: effectiveSortByTimeOnly,
+                                    sortByTimeOnlyLabel: t("newestFirst"),
+                                    onToggleSortByTimeOnly: handleToggleSortByTimeOnly,
+                                }
+                                : {}),
                             ...(isAlarmTable
                                 ? {
                                     unreadOnly: effectiveUnreadOnly,
@@ -3080,9 +3325,8 @@ export default function EventTable({
                         },
                         columnsManagement: {getTogglableColumns: getColumnList},
                     }}
-                    initialState={{
-                        sorting: {sortModel: [{field: "status", sort: "asc"}]},
-                    }}
+                    sortModel={sortModel}
+                    onSortModelChange={setSortModel}
                     getCellClassName={(params: GridCellParams<any, any, string>) => {
                         if (params.value === "Gamma") return "highlightGamma";
                         if (params.value === "Neutron") return "highlightNeutron";
@@ -3173,6 +3417,15 @@ export default function EventTable({
                     initialResult={comparisonDialogState.initialResult ?? null}
                     highlightOccupancyObsId={comparisonDialogState.highlightObsId ?? null}
                     onAdjudicationComplete={retryEventQueries}
+                />
+            )}
+            {eventLogUffViewerUuid && (
+                <CargoUffViewerDialog
+                    open={Boolean(eventLogUffViewerUuid)}
+                    onClose={() => setEventLogUffViewerUuid(null)}
+                    uffUuid={eventLogUffViewerUuid}
+                    node={primaryEventLogNode}
+                    occupancyObsId={vehicleFilteredRows[0]?.occupancyObsId ?? null}
                 />
             )}
             <NestedEventFilterDialog

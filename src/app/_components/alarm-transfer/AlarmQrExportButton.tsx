@@ -24,10 +24,12 @@ import {
     alarmTransferFileName,
     AlarmTransferBuildResult,
     buildAlarmTransfer,
+    MAX_OBSERVATIONS_PER_SERIES,
     serializeAlarmTransferDocument,
 } from "@/lib/data/oscar/AlarmQrTransfer";
 import {AlarmQrRaster, renderAlarmQrRaster} from "@/lib/data/oscar/AlarmQrRaster";
 import {useLanguage} from "@/app/contexts/LanguageContext";
+import {getIntlLocale} from "@/app/utils/LocaleUtils";
 
 interface Props {
     event: EventTableData;
@@ -47,7 +49,8 @@ function saveBlob(blob: Blob, filename: string) {
 }
 
 export default function AlarmQrExportButton({event, lane, iconOnly = false}: Props) {
-    const {t} = useLanguage();
+    const {language, t} = useLanguage();
+    const locale = getIntlLocale(language);
     const rawEventUuid = typeof event.occupancyObsId === "string" ? event.occupancyObsId : "";
     const eventUuid = rawEventUuid.trim();
     const exportReady = eventUuid.length > 0 && rawEventUuid.length <= 128;
@@ -183,9 +186,21 @@ export default function AlarmQrExportButton({event, lane, iconOnly = false}: Pro
                                         {t("alarmQrTooLarge")}
                                     </Alert>
                                 )}
-                                <Alert severity="info" sx={{width: "100%"}}>
+                                <Alert severity="info" role="status" sx={{width: "100%"}}>
                                     {t("alarmQrDownsampleNotice")}
                                 </Alert>
+                                {result.seriesTruncated && (
+                                    <Alert
+                                        severity="info"
+                                        role="status"
+                                        data-testid="alarm-transfer-series-cap-notice"
+                                        sx={{width: "100%", "& .MuiAlert-message": {textWrap: "pretty"}}}
+                                    >
+                                        {t("alarmTransferSeriesTruncatedNotice", {
+                                            max: MAX_OBSERVATIONS_PER_SERIES.toLocaleString(locale),
+                                        })}
+                                    </Alert>
+                                )}
                                 <Stack spacing={0.5} sx={{width: "100%"}}>
                                     <Typography variant="caption" color="text.secondary">
                                         {t("occupancyUuid")}

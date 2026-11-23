@@ -149,6 +149,19 @@ export default function DailyFileMessage(props: MessageProps) {
             </AccordionSummary>
             <AccordionDetails>
                 <Stack direction="column" alignItems="flex-start" spacing={0.5}>
+                    {dailyFileMessages.length > 0 && (
+                        <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            data-testid="live-daily-file-cap-note"
+                            sx={{textWrap: "pretty"}}
+                        >
+                            {t('liveDailyFileCapNotice', {
+                                shown: dailyFileMessages.length,
+                                max: 15,
+                            })}
+                        </Typography>
+                    )}
                     {dailyFileMessages.map(message => (
                         <Stack key={message.id} direction="row" spacing={0.5}>
                             <Typography variant="body1">

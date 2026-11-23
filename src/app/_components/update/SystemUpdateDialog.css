@@ -1,0 +1,54 @@
+/* Modern Web Guidance compliant native <dialog> & <progress> styles */
+dialog.oscar-update-dialog {
+    padding: 0;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 12px;
+    max-width: min(640px, calc(100vw - 32px));
+    width: 100%;
+    max-height: calc(100dvh - 48px);
+    background-color: var(--mui-palette-background-paper, #111827);
+    color: var(--mui-palette-text-primary, #f8fafc);
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.42);
+    color-scheme: light dark;
+}
+
+dialog.oscar-update-dialog[open] {
+    display: flex;
+    flex-direction: column;
+}
+
+dialog.oscar-update-dialog:modal {
+    overscroll-behavior: contain;
+}
+
+dialog.oscar-update-dialog::backdrop {
+    background: rgba(15, 23, 42, 0.68);
+    backdrop-filter: blur(2px);
+    overflow: hidden;
+    overscroll-behavior: contain;
+}
+
+progress.oscar-update-progress {
+    width: 100%;
+    height: 12px;
+    border-radius: 999px;
+    overflow: hidden;
+    accent-color: #2563eb;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    dialog.oscar-update-dialog[open] {
+        animation: oscarUpdateDialogFadeIn 140ms ease-out;
+    }
+}
+
+@keyframes oscarUpdateDialogFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

@@ -1,7 +1,10 @@
 import {
     buildOperationalViewCatalog,
     getOperationalViewKeys,
+    mergeOperationalViewCatalogs,
     parseOperationalView,
+    resolveRouteForViewSwitch,
+    resolveScopedViewDropdownState,
     systemMatchesOperationalView,
     withOperationalView,
 } from "../../src/lib/data/oscar/OperationalView";
@@ -206,5 +209,127 @@ describe("operational view scoping", () => {
         expect(lanes.size).to.equal(0);
         expect(lane.properties.properties.keywords).to.deep.equal([]);
         expect(warn).to.have.been.called;
+    });
+
+    it("merges multi-node catalogs and computes RBAC-aware navbar dropdown states", () => {
+        const nodeALane1: any = geoJsonSystem("a-1", "urn:osh:system:lane:lane1", "Lane 1");
+        const nodeALane2: any = geoJsonSystem("a-2", "urn:osh:system:lane:lane2", "Lane 2");
+        nodeALane1.properties.properties.keywords = ["oscar:view:north-gate"];
+        nodeALane2.properties.properties.keywords = ["oscar:view:north-gate", "oscar:view:truck-portal"];
+
+        const nodeBLane1: any = geoJsonSystem("b-1", "urn:osh:system:lane:lane1", "Remote Lane 1");
+        nodeBLane1.properties.properties.keywords = ["oscar:view:south-gate"];
+
+        const merged = mergeOperationalViewCatalogs([
+            buildOperationalViewCatalog([nodeALane1, nodeALane2]),
+            buildOperationalViewCatalog([nodeBLane1]),
+        ]);
+
+        expect(merged.totalLaneCount).to.equal(3);
+        expect(merged.options).to.deep.equal([
+            {key: "north-gate", laneCount: 2},
+            {key: "south-gate", laneCount: 1},
+            {key: "truck-portal", laneCount: 1},
+        ]);
+
+        // Hidden when no views are configured and unscoped
+        expect(resolveScopedViewDropdownState({
+            availableViews: [],
+            allowedViews: [],
+            activeViewKey: null,
+            viewError: null,
+        })).to.deep.equal({
+            mode: "hidden",
+            includeAllLanes: true,
+            options: [],
+        });
+
+        // Unrestricted user gets All Lanes + all configured views
+        expect(resolveScopedViewDropdownState({
+            availableViews: merged.options,
+            allowedViews: [],
+            activeViewKey: "north-gate",
+            viewError: null,
+        })).to.deep.equal({
+            mode: "dropdown",
+            includeAllLanes: true,
+            options: merged.options,
+        });
+
+        // Single-view restricted user gets a non-interactive badge (no All Lanes)
+        expect(resolveScopedViewDropdownState({
+            availableViews: merged.options,
+            allowedViews: ["north-gate"],
+            activeViewKey: "north-gate",
+            viewError: null,
+        })).to.deep.equal({
+            mode: "badge",
+            includeAllLanes: false,
+            options: [{key: "north-gate", laneCount: 2}],
+        });
+
+        // Multi-view restricted user gets a dropdown strictly limited to allowedViews (no All Lanes)
+        expect(resolveScopedViewDropdownState({
+            availableViews: merged.options,
+            allowedViews: ["north-gate", "truck-portal"],
+            activeViewKey: "north-gate",
+            viewError: null,
+        })).to.deep.equal({
+            mode: "dropdown",
+            includeAllLanes: false,
+            options: [
+                {key: "north-gate", laneCount: 2},
+                {key: "truck-portal", laneCount: 1},
+            ],
+        });
+    });
+
+    it("resolves safe route targets when switching scoped views", () => {
+        expect(resolveRouteForViewSwitch("/event-log", "?restore=1", "north-gate"))
+            .to.equal("/event-log?restore=1&view=north-gate");
+        expect(resolveRouteForViewSwitch("/event-log", "?restore=1&view=north-gate", null))
+            .to.equal("/event-log?restore=1");
+        expect(resolveRouteForViewSwitch("/lane-view", "?view=north-gate", "south-gate"))
+            .to.equal("/?view=south-gate");
+        expect(resolveRouteForViewSwitch("/event-details", "?eventId=abc&view=north-gate", null))
+            .to.equal("/event-log");
+    });
+
+    it("invalidates cached operational view catalog so sandbox track switches immediately surface south-gate", async () => {
+        const laneNorth: any = geoJsonSystem("lane-1", "urn:osh:system:lane:demo-lane-01", "DemoLane01");
+        const laneSouth: any = geoJsonSystem("lane-2", "urn:osh:system:lane:demo-lane-02", "DemoLane02");
+        let activeSystems = [laneNorth];
+
+        const node: any = Object.create(Node.prototype);
+        node.operationalViewCatalogPromise = null;
+        node.fetchSystems = cy.stub().callsFake(async () => activeSystems.map((s) => JSON.parse(JSON.stringify(s))));
+        node.systemsApi = {
+            getSystemById: cy.stub().callsFake(async (id: string) => ({
+                properties: {
+                    keywords: id === "lane-2" ? ["oscar:view:south-gate"] : ["oscar:view:north-gate"],
+                },
+            })),
+        };
+
+        // Operator Track: only north-gate is staged initially
+        const operatorMerged = mergeOperationalViewCatalogs([await node.fetchOperationalViewCatalog()]);
+        expect(operatorMerged.totalLaneCount).to.equal(1);
+        expect(operatorMerged.options).to.deep.equal([{key: "north-gate", laneCount: 1}]);
+
+        // Switching to Supervisor Track adds DemoLane02 (south-gate)
+        activeSystems = [laneNorth, laneSouth];
+
+        // Without invalidation, memoized promise returns stale Operator catalog
+        const cachedMerged = mergeOperationalViewCatalogs([await node.fetchOperationalViewCatalog()]);
+        expect(cachedMerged.options).to.deep.equal([{key: "north-gate", laneCount: 1}]);
+
+        // Invalidating (or passing forceRefresh=true on oscar:sandbox-lanes-changed) surfaces south-gate immediately
+        node.invalidateOperationalViewCatalog();
+        const supervisorMerged = mergeOperationalViewCatalogs([await node.fetchOperationalViewCatalog()]);
+        expect(supervisorMerged.totalLaneCount).to.equal(2);
+        expect(supervisorMerged.options).to.deep.equal([
+            {key: "north-gate", laneCount: 1},
+            {key: "south-gate", laneCount: 1},
+        ]);
     });
 });

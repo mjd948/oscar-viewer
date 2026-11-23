@@ -6,6 +6,7 @@
 "use client";
 
 import {
+    Alert,
     SnackbarCloseReason,
     Stack,
     Typography,
@@ -26,7 +27,26 @@ import {
     InputLabel, SelectChangeEvent,
 } from "@mui/material";
 import React, {ChangeEvent, useContext, useEffect, useMemo, useRef, useState} from "react";
+import dynamic from "next/dynamic";
 import CompareArrowsRoundedIcon from "@mui/icons-material/CompareArrowsRounded";
+import FolderSharedRoundedIcon from "@mui/icons-material/FolderSharedRounded";
+import LayersRoundedIcon from "@mui/icons-material/LayersRounded";
+import {
+    fetchActiveCargoUffInfo,
+    isCargoUffAttachmentPath,
+    searchCargoUff,
+    stageCargoUffForAdjudication,
+    UffSearchMatch,
+} from "@/lib/data/oscar/CargoUffApi";
+
+const CargoUffViewerDialog = dynamic(
+    () => import("@/app/_components/uff/CargoUffViewerDialog"),
+    {ssr: false},
+);
+const CargoUffSmbPickerDialog = dynamic(
+    () => import("@/app/_components/uff/CargoUffSmbPickerDialog"),
+    {ssr: false},
+);
 import AdjudicationLog from "./AdjudicationLog"
 import EmlAnalysisCard from "./EmlAnalysisCard";
 import {EventTableData} from "@/lib/data/oscar/TableHelpers";
@@ -146,7 +166,8 @@ export default function AdjudicationDetail(props: {
     const [scannedData, setScannedData] = useState<ScannedDataWithWebId[]>([]);
     const scanner = useRef<QrScanner | null>(null);
 
-    const {laneMapRef, activeViewKey} = useContext(DataSourceContext);
+    const {laneMapRef, activeViewKey, currentSession} = useContext(DataSourceContext);
+    const isReadOnlyViewer = Boolean(currentSession?.isReadOnly);
     const laneMap = useSelector((state: RootState) => selectLaneMap(state));
     const laneUid = laneMap.get(props.event?.laneId)?.laneSystem?.properties?.properties?.uid;
     const effectiveLaneMap = laneMapRef?.current && laneMapRef.current.size > 0
@@ -160,6 +181,19 @@ export default function AdjudicationDetail(props: {
     const [relatedVehicleResult, setRelatedVehicleResult] = useState<FederatedVehicleSearchResult | null>(null);
     const [relatedSearchNonce, setRelatedSearchNonce] = useState<number>(0);
     const [openVehicleComparison, setOpenVehicleComparison] = useState<boolean>(false);
+
+    // Optional Cargo NII (WCO UFF) integration state — zero UI footprint when disabled
+    const eventParentNode: INode | null = effectiveLaneMap.get(props.event?.laneId)?.parentNode ?? null;
+    const [uffEnabled, setUffEnabled] = useState<boolean>(false);
+    const [correlatedUffMatches, setCorrelatedUffMatches] = useState<UffSearchMatch[]>([]);
+    const [openUffPicker, setOpenUffPicker] = useState<boolean>(false);
+    const [linkingUffUuid, setLinkingUffUuid] = useState<string | null>(null);
+    const [viewerTarget, setViewerTarget] = useState<{
+        open: boolean;
+        uffUuid?: string | null;
+        bucketKey?: string | null;
+        localFile?: File | null;
+    }>({open: false});
 
     // Key per-occupancy reset on laneId|occupancyCount|startTime rather than occupancyObsId
     // so live-event UUID resolution does not clear operator-entered Vehicle ID input.
@@ -198,8 +232,41 @@ export default function AdjudicationDetail(props: {
         return () => window.clearTimeout(timer);
     }, [vehicleId, vehicleIdTouched]);
 
+    const [adjSnackMsg, setAdjSnackMsg] = useState('');
+    const [colorStatus, setColorStatus] = useState('');
+    const [openSnack, setOpenSnack] = useState(false);
+    const [shouldFetchLogs, setShouldFetchLogs] = useState<boolean>(false);
+    const [loggedAdjudications, setLoggedAdjudications] = useState<AdjudicationData[]>([]);
+
     useEffect(() => {
         if (vehicleIdTouched || vehicleId.trim().length > 0) return;
+
+        let priorVehicleId = "";
+        for (let idx = loggedAdjudications.length - 1; idx >= 0; idx -= 1) {
+            const candidate = loggedAdjudications[idx]?.vehicleId?.trim() ?? "";
+            if (candidate.length > 0) {
+                priorVehicleId = candidate;
+                break;
+            }
+        }
+        if (!priorVehicleId && props.event?.vehicleId && !props.event.vehicleIdFromOcr) {
+            priorVehicleId = props.event.vehicleId.trim();
+        }
+        if (priorVehicleId) {
+            setVehicleId(priorVehicleId);
+            setVehicleIdAutoFilled(false);
+            setAdjData(previous => {
+                if (!previous) return previous;
+                const updated = Object.assign(
+                    Object.create(Object.getPrototypeOf(previous)),
+                    previous,
+                ) as AdjudicationData;
+                updated.setVehicleId(priorVehicleId);
+                return updated;
+            });
+            return;
+        }
+
         const candidate = selectAutoFillCandidate(ocrResults);
         if (!candidate) return;
         setVehicleId(candidate.value);
@@ -213,13 +280,7 @@ export default function AdjudicationDetail(props: {
             updated.setVehicleId(candidate.value);
             return updated;
         });
-    }, [ocrResults, vehicleId, vehicleIdTouched]);
-
-    const [adjSnackMsg, setAdjSnackMsg] = useState('');
-    const [colorStatus, setColorStatus] = useState('');
-    const [openSnack, setOpenSnack] = useState(false);
-    const [shouldFetchLogs, setShouldFetchLogs] = useState<boolean>(false);
-    const [loggedAdjudications, setLoggedAdjudications] = useState<AdjudicationData[]>([]);
+    }, [loggedAdjudications, ocrResults, props.event?.vehicleId, props.event?.vehicleIdFromOcr, vehicleId, vehicleIdTouched]);
     const [webIdResults, setWebIdResults] = useState<WebIdAnalysisResult[]>([]);
     const [selectedWebIdResultId, setSelectedWebIdResultId] = useState<string[]>([]);
     const [isSubmittingWebId, setIsSubmittingWebId] = useState(false);
@@ -337,12 +398,62 @@ export default function AdjudicationDetail(props: {
         });
     }, [props.event.occupancyObsId]);
 
+    useEffect(() => {
+        let cancelled = false;
+        void fetchActiveCargoUffInfo(eventParentNode, props.ocrFetchImpl)
+            .then(info => {
+                if (!cancelled) {
+                    setUffEnabled(Boolean(info.enabled));
+                }
+            })
+            .catch(() => {
+                if (!cancelled) setUffEnabled(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [eventParentNode, props.ocrFetchImpl]);
+
+    useEffect(() => {
+        const normalized = normalizeVehicleId(effectiveCorrelationVehicleId);
+        if (!uffEnabled || normalized.length < 3) {
+            setCorrelatedUffMatches([]);
+            return;
+        }
+        const ctrl = new AbortController();
+        void searchCargoUff(
+            {
+                vehicleId: effectiveCorrelationVehicleId,
+                nearTime: props.event?.startTime || undefined,
+                windowMinutes: 0,
+                fuzzy: true,
+                limit: 5,
+            },
+            eventParentNode,
+            ctrl.signal,
+            props.ocrFetchImpl,
+        )
+            .then(res => {
+                if (!ctrl.signal.aborted) {
+                    setCorrelatedUffMatches(res.matches ?? []);
+                }
+            })
+            .catch(() => {
+                if (!ctrl.signal.aborted) {
+                    setCorrelatedUffMatches([]);
+                }
+            });
+        return () => ctrl.abort();
+    }, [uffEnabled, effectiveCorrelationVehicleId, props.event?.startTime, eventParentNode, props.ocrFetchImpl, relatedSearchNonce]);
+
     const syncAutoSecondaryInspection = React.useCallback((
         nextFiles: readonly FileWithWebId[],
         nextScanned: readonly ScannedDataWithWebId[],
     ) => {
         if (secondaryInspectionManuallySetRef.current) return;
-        const hasSpectroscopic = nextFiles.some(f => f.webIdEnabled || isSpectroscopicFileName(f.file.name))
+        const hasSpectroscopic = nextFiles.some(
+            f => f.webIdEnabled || isSpectroscopicFileName(f.file.name) || isCargoUffAttachmentPath(f.file.name),
+        )
             || nextScanned.length > 0
             || webIdResults.length > 0;
         const nextStatus = hasSpectroscopic ? "COMPLETED" : "";
@@ -481,6 +592,117 @@ export default function AdjudicationDetail(props: {
         setUploadedFiles(nextFiles);
         syncAutoSecondaryInspection(nextFiles, scannedData);
         e.target.value = '';
+
+        // If any selected file is a WCO .uff archive, asynchronously extract any embedded .n42
+        // radiation file into WebID and populate Vehicle ID if currently empty.
+        const uffCandidates = files.filter(f => f.name.toLowerCase().endsWith('.uff'));
+        if (uffCandidates.length > 0) {
+            void (async () => {
+                try {
+                    const {parseLocalUffFile} = await import('@/lib/data/oscar/UffClientArchive');
+                    for (const uffFile of uffCandidates) {
+                        const parsed = await parseLocalUffFile(uffFile);
+                        const detectedId = parsed.metadata.allDisplayVehicleIds[0];
+                        if (detectedId) {
+                            setVehicleId(prev => {
+                                if (prev.trim().length > 0) return prev;
+                                setAdjData(prevAdj => {
+                                    if (!prevAdj) return prevAdj;
+                                    const updated = Object.assign(
+                                        Object.create(Object.getPrototypeOf(prevAdj)),
+                                        prevAdj,
+                                    ) as AdjudicationData;
+                                    updated.setVehicleId(detectedId);
+                                    return updated;
+                                });
+                                return detectedId;
+                            });
+                        }
+                        if (parsed.embeddedN42File) {
+                            const n42File = parsed.embeddedN42File;
+                            setUploadedFiles(prev => {
+                                if (prev.some(item => item.file.name === n42File.name)) return prev;
+                                const appended: FileWithWebId[] = [
+                                    ...prev,
+                                    {
+                                        file: n42File,
+                                        webIdEnabled: true,
+                                        detectorResponseFunction: 'auto',
+                                        spectrumType: 'foreground',
+                                        synthesizeBackground: !prev.some(item => item.spectrumType === 'background'),
+                                    },
+                                ];
+                                syncAutoSecondaryInspection(appended, scannedData);
+                                return appended;
+                            });
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Unable to inspect local .uff package metadata:', err);
+                }
+            })();
+        }
+    };
+
+    const handleLinkSmbUffToAdjudication = async (uffUuid: string) => {
+        try {
+            setLinkingUffUuid(uffUuid);
+            const staged = await stageCargoUffForAdjudication(uffUuid, eventParentNode);
+            const refFile = new File(['{}'], staged.referenceKey, {type: 'application/json'});
+            const additions: FileWithWebId[] = [
+                {
+                    file: refFile,
+                    webIdEnabled: false,
+                    detectorResponseFunction: 'auto',
+                    spectrumType: 'foreground',
+                    synthesizeBackground: false,
+                    serverPath: staged.referenceUri,
+                },
+            ];
+            if (staged.manifestUri) {
+                const pdfName = staged.manifestUri.split('/').pop() || `uff-manifest-${uffUuid}.pdf`;
+                additions.push({
+                    file: new File([''], pdfName, {type: 'application/pdf'}),
+                    webIdEnabled: false,
+                    detectorResponseFunction: 'auto',
+                    spectrumType: 'foreground',
+                    synthesizeBackground: false,
+                    serverPath: staged.manifestUri,
+                });
+            }
+            if (staged.n42ContentBase64 && staged.n42FileName) {
+                const bin = Uint8Array.from(atob(staged.n42ContentBase64), ch => ch.charCodeAt(0));
+                const n42File = new File([bin], staged.n42FileName, {type: 'application/xml'});
+                additions.push({
+                    file: n42File,
+                    webIdEnabled: true,
+                    detectorResponseFunction: 'auto',
+                    spectrumType: 'foreground',
+                    synthesizeBackground: !uploadedFiles.some(item => item.spectrumType === 'background'),
+                });
+            }
+            setUploadedFiles(prev => {
+                const existingNames = new Set(prev.map(p => p.file.name));
+                const next = [...prev, ...additions.filter(a => !existingNames.has(a.file.name))];
+                syncAutoSecondaryInspection(next, scannedData);
+                return next;
+            });
+
+            const detectedId = staged.caseMetadata?.allDisplayVehicleIds?.[0];
+            if (detectedId && !vehicleId.trim()) {
+                handleOcrSelect(detectedId);
+            }
+            setOpenUffPicker(false);
+            setAdjSnackMsg(t('cargoUffLinkedToast', {id: uffUuid.slice(0, 8)}));
+            setColorStatus('success');
+            setOpenSnack(true);
+        } catch (err: any) {
+            setAdjSnackMsg(err?.message || t('cargoUffLinkFailedToast'));
+            setColorStatus('error');
+            setOpenSnack(true);
+        } finally {
+            setLinkingUffUuid(null);
+        }
     };
 
     const handleFileDelete = (fileIndex: number) => {
@@ -757,7 +979,16 @@ export default function AdjudicationDetail(props: {
                 return;
             }
 
-            props.event.adjudicatedData = tempAdjData;
+            let updatedEvent = props.event;
+            if (Object.isFrozen(props.event) || !Object.isExtensible(props.event)) {
+                updatedEvent = Object.assign(
+                    Object.create(Object.getPrototypeOf(props.event)),
+                    props.event,
+                    {adjudicatedData: tempAdjData},
+                );
+            } else {
+                props.event.adjudicatedData = tempAdjData;
+            }
             markSessionCachedEventAdjudicated(
                 tempAdjData.occupancyObsId,
                 tempAdjData.adjudicationCode?.code,
@@ -766,8 +997,8 @@ export default function AdjudicationDetail(props: {
             setAdjSnackMsg(t('adjudicationSuccessful', {occupancyId: props.event.occupancyCount}));
             setColorStatus('success')
 
-            dispatch(setSelectedEvent(props.event));
-            dispatch(setAdjudicatedEventId(props.event.id));
+            dispatch(setSelectedEvent(updatedEvent));
+            dispatch(setAdjudicatedEventId(updatedEvent.id));
 
             setShouldFetchLogs(true);
             setRelatedSearchNonce(previous => previous + 1);
@@ -1133,18 +1364,38 @@ export default function AdjudicationDetail(props: {
                                             </Box>
 
                                             <Stack direction="row" spacing={1} alignItems="center">
-                                                <FormControlLabel
-                                                    control={
-                                                        <Checkbox
-                                                            size="small"
-                                                            checked={fileData.webIdEnabled}
-                                                            onChange={handleWebIdAnalysis(index)}
-                                                            disabled={!!fileData.serverPath}
-                                                        />
-                                                    }
-                                                    label={<Typography variant="body2">WebID</Typography>}
-                                                    sx={{mr: 0}}
-                                                />
+                                                {isCargoUffAttachmentPath(fileData.file.name) ? (
+                                                    <Button
+                                                        type="button"
+                                                        size="small"
+                                                        variant="outlined"
+                                                        color="secondary"
+                                                        startIcon={<LayersRoundedIcon fontSize="small" />}
+                                                        onClick={() =>
+                                                            setViewerTarget(
+                                                                fileData.serverPath
+                                                                    ? {open: true, bucketKey: fileData.serverPath}
+                                                                    : {open: true, localFile: fileData.file},
+                                                            )
+                                                        }
+                                                        data-testid={`inspect-uploaded-uff-${index}`}
+                                                    >
+                                                        {t('inspectCargoRadiograph')}
+                                                    </Button>
+                                                ) : (
+                                                    <FormControlLabel
+                                                        control={
+                                                            <Checkbox
+                                                                size="small"
+                                                                checked={fileData.webIdEnabled}
+                                                                onChange={handleWebIdAnalysis(index)}
+                                                                disabled={!!fileData.serverPath}
+                                                            />
+                                                        }
+                                                        label={<Typography variant="body2">WebID</Typography>}
+                                                        sx={{mr: 0}}
+                                                    />
+                                                )}
 
                                                 {fileData.webIdEnabled && (
 
@@ -1423,6 +1674,28 @@ export default function AdjudicationDetail(props: {
                                         style={{display: "none"}}
                                     />
                                 </Button>
+                                {uffEnabled && !isReadOnlyViewer && (
+                                    <Button
+                                        type="button"
+                                        startIcon={<FolderSharedRoundedIcon />}
+                                        onClick={() => setOpenUffPicker(true)}
+                                        data-testid="open-cargo-uff-picker-btn"
+                                        sx={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            width: "auto",
+                                            padding: "8px",
+                                            borderStyle: "solid",
+                                            borderWidth: "1px",
+                                            borderRadius: "10px",
+                                            borderColor: "primary.main",
+                                            backgroundColor: "inherit",
+                                            color: "primary.main",
+                                        }}
+                                    >
+                                        {t('browseCargoUff')}
+                                    </Button>
+                                )}
                                 <Button
                                     component="label"
                                     startIcon={<QrCode/>}
@@ -1484,6 +1757,18 @@ export default function AdjudicationDetail(props: {
                                         || effectiveCorrelationVehicleId,
                                 })}
                             </Typography>
+                            <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                data-testid="vehicle-related-window-note"
+                                sx={{textWrap: "pretty"}}
+                            >
+                                {relatedVehicleResult.truncated
+                                    ? t("vehicleRelatedWindowTruncatedSummary", {
+                                        limit: relatedVehicleResult.limitPerNode ?? 200,
+                                    })
+                                    : t("vehicleRelatedWindowSummary")}
+                            </Typography>
                             <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
                                 <Chip
                                     size="small"
@@ -1538,6 +1823,76 @@ export default function AdjudicationDetail(props: {
                                 count: relatedVehicleResult.passes.length,
                             })}
                         </Button>
+                    </Stack>
+                </Paper>
+            )}
+            {uffEnabled && correlatedUffMatches.length > 0 && (
+                <Paper
+                    variant="outlined"
+                    data-testid="correlated-cargo-uff-banner"
+                    sx={{
+                        p: 1.5,
+                        borderColor: "primary.main",
+                        bgcolor: "action.hover",
+                    }}
+                >
+                    <Stack
+                        direction={{xs: "column", md: "row"}}
+                        spacing={1.5}
+                        alignItems={{xs: "flex-start", md: "center"}}
+                        justifyContent="space-between"
+                    >
+                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                            <LayersRoundedIcon color="primary" fontSize="small" />
+                            <Typography variant="body2" fontWeight={700}>
+                                {t('cargoUffCorrelatedTitle', {count: correlatedUffMatches.length})}
+                            </Typography>
+                            <Chip
+                                size="small"
+                                color="primary"
+                                label={`UFF ${correlatedUffMatches[0]!.uffVersion} · ${correlatedUffMatches[0]!.scannerId || 'NII'}`}
+                            />
+                            {correlatedUffMatches[0]!.fuzzyMatch && (
+                                <Chip
+                                    size="small"
+                                    color="warning"
+                                    label={`OCR ±1: ${correlatedUffMatches[0]!.matchedIdentifier}`}
+                                />
+                            )}
+                            {correlatedUffMatches[0]!.goodsDescription && (
+                                <Chip
+                                    size="small"
+                                    variant="outlined"
+                                    label={`HS ${correlatedUffMatches[0]!.hsCode}: ${correlatedUffMatches[0]!.goodsDescription}`}
+                                />
+                            )}
+                        </Stack>
+                        <Stack direction="row" spacing={1}>
+                            <Button
+                                type="button"
+                                size="small"
+                                variant="contained"
+                                color="primary"
+                                startIcon={<LayersRoundedIcon />}
+                                onClick={() => setViewerTarget({open: true, uffUuid: correlatedUffMatches[0]!.uffUuid})}
+                                data-testid="open-correlated-cargo-uff-btn"
+                            >
+                                {t('openCargoXray')}
+                            </Button>
+                            {!isReadOnlyViewer && (
+                                <Button
+                                    type="button"
+                                    size="small"
+                                    variant="outlined"
+                                    color="secondary"
+                                    disabled={linkingUffUuid === correlatedUffMatches[0]!.uffUuid}
+                                    onClick={() => void handleLinkSmbUffToAdjudication(correlatedUffMatches[0]!.uffUuid)}
+                                    data-testid="link-correlated-cargo-uff-btn"
+                                >
+                                    {t('linkCargoUffShort')}
+                                </Button>
+                            )}
+                        </Stack>
                     </Stack>
                 </Paper>
             )}
@@ -1656,6 +2011,13 @@ export default function AdjudicationDetail(props: {
                     </Grid>
 
                     <Grid item container xs={12} spacing={2} alignItems="center" justifyContent="flex-end">
+                        {isReadOnlyViewer && (
+                            <Grid item xs={12}>
+                                <Alert severity="info" data-testid="viewer-readonly-adjudication-alert">
+                                    {t('viewerReadOnlyAdjudicationNotice')}
+                                </Alert>
+                            </Grid>
+                        )}
                         <Grid item xs={"auto"}>
                             <Stack direction="row" spacing={2} alignItems="center">
                                 <SecondaryInspectionSelect
@@ -1667,6 +2029,7 @@ export default function AdjudicationDetail(props: {
                                     disableElevation
                                     variant={"contained"}
                                     color={"success"}
+                                    disabled={isReadOnlyViewer}
                                     onClick={sendAdjudicationData}
                                 >
                                     {t('submit')}
@@ -1826,6 +2189,39 @@ export default function AdjudicationDetail(props: {
                         setRelatedSearchNonce(previous => previous + 1);
                     }}
                     fetchImpl={props.ocrFetchImpl}
+                />
+            )}
+            {openUffPicker && (
+                <CargoUffSmbPickerDialog
+                    open={openUffPicker}
+                    onClose={() => setOpenUffPicker(false)}
+                    node={eventParentNode}
+                    alarmTimestampIso={props.event?.startTime ?? null}
+                    initialVehicleId={effectiveCorrelationVehicleId || null}
+                    onInspectUff={uuid => setViewerTarget({open: true, uffUuid: uuid})}
+                    onLinkUff={uuid => handleLinkSmbUffToAdjudication(uuid)}
+                    linkingUuid={linkingUffUuid}
+                />
+            )}
+            {viewerTarget.open && (
+                <CargoUffViewerDialog
+                    open={viewerTarget.open}
+                    onClose={() => setViewerTarget({open: false})}
+                    uffUuid={viewerTarget.uffUuid ?? null}
+                    bucketKey={viewerTarget.bucketKey ?? null}
+                    localFile={viewerTarget.localFile ?? null}
+                    node={eventParentNode}
+                    occupancyObsId={props.event?.occupancyObsId ?? null}
+                    onApplyVehicleId={!isReadOnlyViewer ? selected => handleOcrSelect(selected) : undefined}
+                    onLinkToAdjudication={
+                        !isReadOnlyViewer && viewerTarget.uffUuid
+                            ? async uuid => {
+                                  await handleLinkSmbUffToAdjudication(uuid);
+                                  setViewerTarget({open: false});
+                              }
+                            : undefined
+                    }
+                    linkingAdjudication={Boolean(linkingUffUuid)}
                 />
             )}
         </Stack>

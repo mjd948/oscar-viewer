@@ -7,7 +7,7 @@ import {
     LaneMapEntry,
     type SharedConnectionLease,
 } from "@/lib/data/oscar/LaneCollection";
-import {Box} from "@mui/material";
+import {Box, Button, Stack, Typography} from "@mui/material";
 import {DataGrid, GridCellParams, gridClasses, GridColDef} from "@mui/x-data-grid";
 import CustomToolbar from "@/app/_components/CustomToolbar";
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
@@ -33,7 +33,13 @@ import {useLanguage} from '@/app/contexts/LanguageContext';
 import {getDataGridLocaleText, getIntlLocale} from '@/app/utils/LocaleUtils';
 import {removeRealtimeEventSubscription} from "@/lib/data/oscar/RealtimeEventNotification";
 
-const STATUS_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
+type FaultTimeWindowPreset = "24h" | "7d" | "15d";
+
+const FAULT_HISTORY_WINDOW_MS: Record<FaultTimeWindowPreset, number> = {
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+    "15d": 15 * 24 * 60 * 60 * 1000,
+};
 const STATUS_FAULT_FILTER = "tamperStatus=true OR alarmState='Fault - Neutron High' OR alarmState='Fault - Gamma High' OR alarmState='Fault - Gamma Low' OR alarmState='Fault - Extended Occupancy'";
 
 export function statusTableEventFromObservation(
@@ -84,11 +90,20 @@ export default function StatusTable({currentLane, entry}: StatusTableProps){
     const [data, setData] = useState<AlarmTableData[]>([]);
 
     const [currentPage, setCurrentPage] = useState(0);
+    const [faultWindowPreset, setFaultWindowPreset] = useState<FaultTimeWindowPreset>("24h");
+    const faultWindowOptions = useMemo<Array<{value: FaultTimeWindowPreset; label: string}>>(
+        () => [
+            {value: "24h", label: t("timeWindow24h")},
+            {value: "7d", label: t("timeWindow7d")},
+            {value: "15d", label: t("timeWindow15d")},
+        ],
+        [t],
+    );
     const getRollingStatusTimeRange = useCallback(() => {
         const end = new Date();
-        const start = new Date(end.getTime() - STATUS_HISTORY_WINDOW_MS);
+        const start = new Date(end.getTime() - FAULT_HISTORY_WINDOW_MS[faultWindowPreset]);
         return `${start.toISOString()}/${end.toISOString()}`;
-    }, []);
+    }, [faultWindowPreset]);
 
 
     const columns: GridColDef<AlarmTableData>[] = [
@@ -254,13 +269,16 @@ export default function StatusTable({currentLane, entry}: StatusTableProps){
         } finally {
             setLoading(false);
         }
-    },[nodes, totalPages])
+    }, [entry, getDatastreamIds, getRollingStatusTimeRange, nodes, pageSize, totalPages]);
 
 
     useEffect(() => {
-        if (totalPages > 0)
-            fetchPage(paginationModel.page)
-    }, [paginationModel.page, paginationModel.pageSize, nodes, totalPages]);
+        if (totalPages > 0) {
+            void fetchPage(paginationModel.page);
+        } else {
+            setData([]);
+        }
+    }, [fetchPage, nodes, paginationModel.page, paginationModel.pageSize, totalPages]);
 
 
     // useEffect(() => {
@@ -415,7 +433,67 @@ export default function StatusTable({currentLane, entry}: StatusTableProps){
         };
     }, [entry, currentPage, pageSize]);
     return(
-        <Box sx={{height: 800, width: '100%'}}>
+        <Box sx={{height: 800, width: '100%', display: 'flex', flexDirection: 'column'}}>
+            <Stack
+                direction={{xs: "column", sm: "row"}}
+                spacing={1}
+                alignItems={{xs: "flex-start", sm: "center"}}
+                justifyContent="space-between"
+                data-testid="lane-fault-window-bar"
+                sx={{
+                    px: 1.5,
+                    py: 0.75,
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
+                    bgcolor: "action.hover",
+                }}
+            >
+                <Typography variant="caption" color="text.secondary" sx={{textWrap: "pretty"}}>
+                    {t("laneFaultWindowNotice", {
+                        window: faultWindowOptions.find(opt => opt.value === faultWindowPreset)?.label ?? faultWindowPreset,
+                    })}
+                </Typography>
+                <Box
+                    role="group"
+                    aria-label={t("laneFaultWindowGroupLabel")}
+                    sx={{display: "inline-flex", alignItems: "center", gap: 0.5, flexWrap: "wrap"}}
+                >
+                    {faultWindowOptions.map((option) => (
+                        <Button
+                            key={option.value}
+                            type="button"
+                            size="small"
+                            aria-pressed={faultWindowPreset === option.value}
+                            onClick={() => {
+                                setFaultWindowPreset(option.value);
+                                setPaginationModel(prev => prev.page === 0 ? prev : {...prev, page: 0});
+                            }}
+                            data-testid={`lane-fault-window-${option.value}`}
+                            sx={{
+                                textTransform: "none",
+                                minInlineSize: "24px",
+                                minBlockSize: "24px",
+                                px: 1,
+                                py: 0.25,
+                                borderRadius: 1,
+                                border: "1px solid",
+                                borderColor: "divider",
+                                color: "text.primary",
+                                "@media (pointer: coarse)": {minBlockSize: "44px", minInlineSize: "44px"},
+                                "&[aria-pressed='true']": {
+                                    bgcolor: "primary.main",
+                                    color: "primary.contrastText",
+                                    borderColor: "primary.dark",
+                                    fontWeight: 700,
+                                },
+                            }}
+                        >
+                            {option.label}
+                        </Button>
+                    ))}
+                </Box>
+            </Stack>
+            <Box sx={{flex: 1, minHeight: 0, width: "100%"}}>
             <DataGrid
                 localeText={getDataGridLocaleText(language)}
                 rows={data}
@@ -464,6 +542,7 @@ export default function StatusTable({currentLane, entry}: StatusTableProps){
                     border: "none",
                 }}
             />
+            </Box>
         </Box>
     )
 }

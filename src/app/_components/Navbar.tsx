@@ -22,16 +22,35 @@ import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import LocationOnRoundedIcon from '@mui/icons-material/LocationOnRounded';
 import CloudRoundedIcon from '@mui/icons-material/CloudRounded';
+import ManageAccountsRoundedIcon from '@mui/icons-material/ManageAccountsRounded';
+import UsbRoundedIcon from '@mui/icons-material/UsbRounded';
+import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded';
 import NotificationsRoundedIcon from '@mui/icons-material/NotificationsRounded';
 import NotificationsOffIcon from '@mui/icons-material/NotificationsOff';
 import SettingsIcon from '@mui/icons-material/Settings';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import MediationIcon from '@mui/icons-material/Mediation';
 import MonitorHeartRoundedIcon from '@mui/icons-material/MonitorHeartRounded';
-import {Alert, Badge, Button, Chip, FormControlLabel, Menu, MenuItem, Slider, Stack, Switch, Tooltip} from '@mui/material';
+import {
+    Alert,
+    Badge,
+    Button,
+    Chip,
+    FormControl,
+    FormControlLabel,
+    InputLabel,
+    Menu,
+    MenuItem,
+    Select,
+    SelectChangeEvent,
+    Slider,
+    Stack,
+    Switch,
+    Tooltip,
+} from '@mui/material';
 import Link from 'next/link';
 import {Download, InsertChart, VolumeDown, VolumeUp} from "@mui/icons-material";
-import AlarmAudio from "@/app/_components/AlarmAudio";
+import AlarmAudio, { applyAlarmAudioVolume } from "@/app/_components/AlarmAudio";
 import {
     selectAlarmAudioVolume,
     selectContinuousAlarmAudio,
@@ -58,7 +77,22 @@ import {setEventData} from "@/lib/state/EventDetailsSlice";
 import QrCodeScannerRoundedIcon from '@mui/icons-material/QrCodeScannerRounded';
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {buildEventDetailsHref} from "@/lib/data/oscar/EventLookup";
+import {
+    ALL_LANES_SELECT_VALUE,
+    resolveRouteForViewSwitch,
+    resolveScopedViewDropdownState,
+} from "@/lib/data/oscar/OperationalView";
 import HelpDialog from "@/app/_components/HelpDialog";
+import SchoolRoundedIcon from "@mui/icons-material/SchoolRounded";
+import SplitscreenRoundedIcon from "@mui/icons-material/SplitscreenRounded";
+import TrainingCoachDock from "@/app/_components/sandbox/TrainingCoachDock";
+import {TRAINING_COACH_UI} from "@/lib/data/oscar/TrainingCurriculum";
+import {
+    dispatchSandboxRefreshEvents,
+    fetchSandboxActiveStatus,
+    SandboxActiveStatus,
+    SandboxVerificationSnapshot,
+} from "@/lib/data/oscar/TrainingSandboxApi";
 import {RootState} from "@/lib/state/Store";
 
 const drawerWidth = 276;
@@ -153,12 +187,57 @@ export default function Navbar({children}: { children: React.ReactNode }) {
     const [helpDialogOpen, setHelpDialogOpen] = useState(false);
 
     const [drawerOpen, setDrawerOpen] = useState(false);  // Open state for navigation drawer
-    const { t } = useLanguage();
+    const { t, language } = useLanguage();
+    const coachUi = TRAINING_COACH_UI[language] ?? TRAINING_COACH_UI.en;
+    const [sandboxStatus, setSandboxStatus] = useState<SandboxActiveStatus>({ sandboxMode: false });
+    const [coachOpen, setCoachOpen] = useState<boolean>(false);
+    const [splitAdminOpen, setSplitAdminOpen] = useState<boolean>(false);
 
     const dispatch = useDispatch();
     const router = useRouter();
     const pathname = usePathname();
-    const {activeViewKey, viewError, scopedHref} = React.useContext(DataSourceContext);
+    const dataSourceCtx = React.useContext(DataSourceContext);
+    const activeViewKey = dataSourceCtx?.activeViewKey ?? null;
+    const viewError = dataSourceCtx?.viewError ?? null;
+    const availableViews = dataSourceCtx?.availableViews ?? [];
+    const totalCatalogLaneCount = dataSourceCtx?.totalCatalogLaneCount ?? 0;
+    const setActiveView = dataSourceCtx?.setActiveView;
+    const scopedHref = dataSourceCtx?.scopedHref ?? ((p: string) => p);
+    const currentSession = dataSourceCtx?.currentSession ?? null;
+    const scopedViewLabelId = React.useId();
+    const scopedViewDropdown = React.useMemo(
+        () => resolveScopedViewDropdownState({
+            availableViews,
+            allowedViews: currentSession?.allowedViews ?? [],
+            activeViewKey,
+            viewError,
+        }),
+        [activeViewKey, availableViews, currentSession?.allowedViews, viewError],
+    );
+    const scopedSelectValue = React.useMemo(() => {
+        if (activeViewKey === null) {
+            return scopedViewDropdown.includeAllLanes ? ALL_LANES_SELECT_VALUE : "";
+        }
+        return scopedViewDropdown.options.some((opt) => opt.key === activeViewKey)
+            ? activeViewKey
+            : "";
+    }, [activeViewKey, scopedViewDropdown.includeAllLanes, scopedViewDropdown.options]);
+
+    const handleScopedViewChange = React.useCallback(
+        (event: SelectChangeEvent<string>) => {
+            const raw = event.target.value;
+            const nextKey = raw === ALL_LANES_SELECT_VALUE || raw === "" ? null : raw;
+            const currentPath = pathname || (typeof window !== "undefined" ? window.location.pathname : "/");
+            const currentSearch = typeof window !== "undefined" ? window.location.search : "";
+            const nextRoute = resolveRouteForViewSwitch(currentPath, currentSearch, nextKey);
+            setActiveView?.(nextKey);
+            const nextPathname = nextRoute.split("?")[0];
+            if (nextPathname !== currentPath) {
+                router.push(nextRoute);
+            }
+        },
+        [pathname, router, setActiveView],
+    );
     // Custom widget pages (user-built; ORNL's own pages stay in menuItems) and the app-bar slot
     // their PageToolbar portals into.
     const navPages = useSelector(selectNavPages);
@@ -170,9 +249,11 @@ export default function Navbar({children}: { children: React.ReactNode }) {
     const visualUnreadAlert = useSelector(selectVisualUnreadAlert);
     const unreadAlarmCount = useSelector(selectDashboardUnreadAlarmCount);
     const configuredNodes = useSelector((state: RootState) => state.oshSlice?.nodes ?? []);
-    const [authenticatedUsername, setAuthenticatedUsername] = useState<string | null>(null);
+    const [fallbackUsername, setFallbackUsername] = useState<string | null>(null);
+    const authenticatedUsername = currentSession?.username ?? fallbackUsername;
 
     useEffect(() => {
+        if (currentSession?.username) return;
         const controller = new AbortController();
         fetch('/session', {
             credentials: 'include',
@@ -180,13 +261,85 @@ export default function Navbar({children}: { children: React.ReactNode }) {
             signal: controller.signal,
         })
             .then((response) => response.ok ? response.json() : Promise.reject(new Error(`Session lookup returned ${response.status}`)))
-            .then((session) => setAuthenticatedUsername(typeof session.username === 'string' ? session.username : null))
+            .then((session) => setFallbackUsername(typeof session.username === 'string' ? session.username : null))
             .catch((error) => {
                 if (error.name !== 'AbortError')
                     console.warn('Unable to read the current OSCAR session', error);
             });
         return () => controller.abort();
+    }, [currentSession?.username]);
+
+    const prevSandboxVerificationRef = React.useRef<SandboxVerificationSnapshot | undefined>(
+        undefined,
+    );
+
+    const applyNextSandboxStatus = React.useCallback((next: SandboxActiveStatus) => {
+        const prevVer = prevSandboxVerificationRef.current;
+        const nextVer = next.verification;
+        if (next.sandboxMode && prevVer && nextVer) {
+            const lanesChanged =
+                prevVer.configuredLaneCount !== nextVer.configuredLaneCount ||
+                prevVer.onlineLaneCount !== nextVer.onlineLaneCount ||
+                prevVer.operationalViewCount !== nextVer.operationalViewCount ||
+                (prevVer.operationalViews ?? []).join(",") !== (nextVer.operationalViews ?? []).join(",");
+            const telemetryChanged =
+                lanesChanged || prevVer.activeFaultOrTamper !== nextVer.activeFaultOrTamper;
+            const eventsChanged =
+                lanesChanged ||
+                prevVer.totalOccupancies !== nextVer.totalOccupancies ||
+                prevVer.operatorAdjudicatedCount !== nextVer.operatorAdjudicatedCount ||
+                prevVer.emlCode9999Count !== nextVer.emlCode9999Count ||
+                prevVer.extendedCode9998Count !== nextVer.extendedCode9998Count;
+            if (lanesChanged || telemetryChanged || eventsChanged) {
+                dispatchSandboxRefreshEvents({
+                    lanes: lanesChanged,
+                    telemetry: telemetryChanged,
+                    events: eventsChanged,
+                });
+            }
+        }
+        prevSandboxVerificationRef.current = nextVer;
+        setSandboxStatus(next);
     }, []);
+
+    const refreshSandboxStatus = React.useCallback(() => {
+        fetchSandboxActiveStatus()
+            .then((next) => applyNextSandboxStatus(next))
+            .catch(() => {});
+    }, [applyNextSandboxStatus]);
+
+    useEffect(() => {
+        let cancelled = false;
+        let pollTimer: ReturnType<typeof setInterval> | null = null;
+        const controller = new AbortController();
+
+        fetchSandboxActiveStatus(controller.signal)
+            .then((initial) => {
+                if (cancelled) return;
+                prevSandboxVerificationRef.current = initial.verification;
+                setSandboxStatus(initial);
+                if (initial.sandboxMode) {
+                    setCoachOpen(true);
+                    pollTimer = setInterval(() => {
+                        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+                            return;
+                        }
+                        fetchSandboxActiveStatus()
+                            .then((next) => {
+                                if (!cancelled) applyNextSandboxStatus(next);
+                            })
+                            .catch(() => {});
+                    }, 4_000);
+                }
+            })
+            .catch(() => {});
+
+        return () => {
+            cancelled = true;
+            controller.abort();
+            if (pollTimer) clearInterval(pollTimer);
+        };
+    }, [applyNextSandboxStatus]);
 
     const handleLogout = async () => {
         try {
@@ -282,6 +435,18 @@ export default function Navbar({children}: { children: React.ReactNode }) {
         setDrawerOpen(false);
     };
 
+    useEffect(() => {
+        const handleOpenDrawerEvent = () => {
+            if (!isDesktop) {
+                setDrawerOpen(true);
+            }
+        };
+        window.addEventListener('oscar:open-nav-drawer', handleOpenDrawerEvent);
+        return () => {
+            window.removeEventListener('oscar:open-nav-drawer', handleOpenDrawerEvent);
+        };
+    }, [isDesktop]);
+
     const [volumeValue, setVolumeValue] = useState(savedVolume);
 
     useEffect(() => {
@@ -291,6 +456,7 @@ export default function Navbar({children}: { children: React.ReactNode }) {
     const handleVolumeChange = (event: Event, newValue: number | number[]) => {
         const volume = newValue as number;
         setVolumeValue(volume);
+        applyAlarmAudioVolume(volume);
         dispatch(setAlarmAudioVolume(volume));
     };
 
@@ -300,45 +466,75 @@ export default function Navbar({children}: { children: React.ReactNode }) {
             title: t('dashboard'),
             icon: <DashboardRoundedIcon/>,
             href: "/",
+            testId: "nav-item-dashboard",
         },
         {
             title: t('events'),
             icon: <WarningRoundedIcon/>,
             href: "/event-log",
+            testId: "nav-item-events",
         },
         {
             title: t('stateOfHealth'),
             icon: <MonitorHeartRoundedIcon/>,
             href: "/health/",
+            testId: "nav-item-health",
         },
         {
             title: t('map'),
             icon: <LocationOnRoundedIcon/>,
             href: "/map",
+            testId: "nav-item-map",
         },
         {
             title: t('national'),
             icon: <MediationIcon/>,
             href: "/national-view",
+            testId: "nav-item-national",
         },
         {
             title: t('reportGenerator'),
             icon: <InsertChart/>,
             href: "/report",
+            testId: "nav-item-report",
         },
         {
             title: t('alarmTransfer'),
             icon: <QrCodeScannerRoundedIcon/>,
             href: "/alarm-transfer",
+            testId: "nav-item-alarm-transfer",
         },
     ]
 
     // Settings items for drawer
     const settingsItems = [
         {
+            title: t('usersAndAccess'),
+            icon: <ManageAccountsRoundedIcon/>,
+            href: "/users",
+            testId: "nav-item-users",
+        },
+        ...(currentSession?.isAdmin !== false
+            ? [
+                {
+                    title: t('usbBackups'),
+                    icon: <UsbRoundedIcon/>,
+                    href: "/usb-backups",
+                    testId: "nav-item-usb-backups",
+                },
+                {
+                    title: t('runtimeExtensions'),
+                    icon: <ExtensionRoundedIcon/>,
+                    href: "/extensions",
+                    testId: "nav-item-extensions",
+                },
+            ]
+            : []),
+        {
             title: t('servers'),
             icon: <CloudRoundedIcon/>,
             href: "/servers",
+            testId: "nav-item-servers",
         }
     ]
 
@@ -353,9 +549,10 @@ export default function Navbar({children}: { children: React.ReactNode }) {
             <Divider/>
             <List>
                 {menuItems.map((item) => (
-                    <Link href={scopedHref(item.href)} passHref key={item.title} onClick={!isDesktop ? handleDrawerClose : null}>
+                    <Link href={scopedHref(item.href)} prefetch={false} passHref key={item.title} onClick={!isDesktop ? handleDrawerClose : null}>
                         <ListItem disablePadding sx={{display: 'block'}}>
                             <ListItemButton
+                                data-testid={item.testId}
                                 sx={{
                                     minHeight: 48,
                                     justifyContent: drawerOpen ? 'initial' : 'center',
@@ -407,9 +604,10 @@ export default function Navbar({children}: { children: React.ReactNode }) {
             <Divider/>
             <List>
                 {settingsItems.map((item) => (
-                    <Link href={scopedHref(item.href)} passHref key={item.title} onClick={!isDesktop ? handleDrawerClose : null}>
+                    <Link href={scopedHref(item.href)} prefetch={false} passHref key={item.title} onClick={!isDesktop ? handleDrawerClose : null}>
                         <ListItem disablePadding sx={{display: 'block'}}>
                             <ListItemButton
+                                data-testid={item.testId}
                                 sx={{
                                     minHeight: 48,
                                     justifyContent: drawerOpen ? 'initial' : 'center',
@@ -445,8 +643,8 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                 sx={{
                     backgroundColor: "background.default",
                     color: "text.primary",
-                    borderBottom: "solid",
-                    borderColor: "action.selected",
+                    borderBottom: sandboxStatus.sandboxMode ? "2px solid #f59e0b" : "solid",
+                    borderColor: sandboxStatus.sandboxMode ? "#f59e0b" : "action.selected",
                     displayPrint: "none",
                 }}
                 isDesktop={isDesktop}
@@ -455,6 +653,7 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                     <IconButton
                         color="inherit"
                         aria-label={t('openDrawer')}
+                        data-testid="navbar-drawer-toggle"
                         onClick={handleDrawerOpen}
                         edge="start"
                         sx={{
@@ -473,34 +672,166 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                             alt=""
                             sx={{height: 26, width: 26, flexShrink: 0, ...(isDarkMode ? {} : {borderRadius: 1})}}
                         />
-                        <Typography variant="h6" noWrap component="div" sx={{minInlineSize: 0, flexShrink: 1}}>
-                            {t('appTitle')}
-                        </Typography>
+                        <Stack direction="row" spacing={1} alignItems="center" sx={{minInlineSize: 0, flexShrink: 1}}>
+                            <Typography variant="h6" noWrap component="div" sx={{minInlineSize: 0, flexShrink: 1}}>
+                                {t('appTitle')}
+                            </Typography>
+                            {sandboxStatus.sandboxMode && (
+                                <Tooltip title={coachUi.sandboxBannerNote} arrow>
+                                    <Chip
+                                        size="small"
+                                        color="warning"
+                                        label={
+                                            typeof sandboxStatus.remainingSeconds === "number"
+                                                ? `${coachUi.sandboxBadge} · ${coachUi.ttlRemainingLabel(Math.max(1, Math.ceil(sandboxStatus.remainingSeconds / 60)))}`
+                                                : coachUi.sandboxBadge
+                                        }
+                                        data-testid="navbar-sandbox-indicator"
+                                        sx={{fontWeight: 800, flexShrink: 0}}
+                                    />
+                                </Tooltip>
+                            )}
+                            {sandboxStatus.sandboxMode && (
+                                <Button
+                                    size="small"
+                                    variant={coachOpen ? "contained" : "outlined"}
+                                    color="warning"
+                                    startIcon={<SchoolRoundedIcon fontSize="small" />}
+                                    onClick={() => setCoachOpen((prev) => !prev)}
+                                    data-testid="navbar-training-coach-toggle"
+                                    sx={{textTransform: 'none', fontWeight: 700, flexShrink: 0}}
+                                >
+                                    {coachUi.coachButtonLabel}
+                                </Button>
+                            )}
+                        </Stack>
                         {/* A custom page's title and edit controls render here (empty on ORNL's pages). */}
                         <Box
                             ref={setHeaderSlot}
                             data-testid="page-header-slot"
                             sx={{display: 'flex', flex: 1, minWidth: 0, alignItems: 'center', gap: 1, overflow: 'hidden'}}
                         />
-                        {activeViewKey && (
+                        {scopedViewDropdown.mode === "badge" && activeViewKey && (
                             <Chip
                                 label={t('operationalViewValue', {view: activeViewKey})}
                                 color="primary"
                                 variant="outlined"
                                 size="small"
+                                data-testid="navbar-scoped-view-badge"
                                 sx={{flexShrink: 0}}
                             />
                         )}
+                        {scopedViewDropdown.mode === "dropdown" && (
+                            <FormControl
+                                size="small"
+                                sx={{
+                                    flexShrink: 0,
+                                    minInlineSize: {xs: 136, sm: 184},
+                                    maxInlineSize: {xs: 180, sm: 260},
+                                }}
+                            >
+                                <InputLabel id={scopedViewLabelId}>{t('scopedViewMenuLabel')}</InputLabel>
+                                <Select
+                                    labelId={scopedViewLabelId}
+                                    label={t('scopedViewMenuLabel')}
+                                    value={scopedSelectValue}
+                                    displayEmpty={scopedSelectValue === "" && Boolean(activeViewKey)}
+                                    renderValue={
+                                        scopedSelectValue === "" && activeViewKey
+                                            ? () => activeViewKey
+                                            : undefined
+                                    }
+                                    onOpen={() => {
+                                        void dataSourceCtx?.refreshOperationalViews?.();
+                                    }}
+                                    onChange={handleScopedViewChange}
+                                    data-testid="navbar-scoped-view-select"
+                                    sx={{
+                                        minBlockSize: "32px",
+                                        "@media (pointer: coarse)": {minBlockSize: "44px"},
+                                    }}
+                                >
+                                    {scopedViewDropdown.includeAllLanes && (
+                                        <MenuItem value={ALL_LANES_SELECT_VALUE} data-testid="navbar-scoped-view-option-all">
+                                            {totalCatalogLaneCount > 0
+                                                ? t('scopedViewAllLanesCount', {count: totalCatalogLaneCount})
+                                                : t('scopedViewAllLanes')}
+                                        </MenuItem>
+                                    )}
+                                    {scopedViewDropdown.options.map((option) => (
+                                        <MenuItem
+                                            key={option.key}
+                                            value={option.key}
+                                            data-testid={`navbar-scoped-view-option-${option.key}`}
+                                        >
+                                            {typeof option.laneCount === "number"
+                                                ? t('scopedViewOptionWithCount', {view: option.key, count: option.laneCount})
+                                                : option.key}
+                                        </MenuItem>
+                                    ))}
+                                </Select>
+                            </FormControl>
+                        )}
                         <Stack direction="row" alignItems="center" spacing={1} sx={{flexShrink: 0}}>
                             {authenticatedUsername && (
-                                <Typography variant="body2" noWrap sx={{maxWidth: {xs: 110, sm: 240}, overflow: 'hidden', textOverflow: 'ellipsis'}}>
-                                    {t('signedInAs', {username: authenticatedUsername})}
-                                </Typography>
+                                <Button
+                                    component={Link}
+                                    prefetch={false}
+                                    href={scopedHref('/users')}
+                                    color="inherit"
+                                    size="small"
+                                    startIcon={<ManageAccountsRoundedIcon fontSize="small" />}
+                                    data-testid="navbar-user-account-btn"
+                                    sx={{textTransform: 'none', maxWidth: {xs: 130, sm: 260}}}
+                                >
+                                    <Typography variant="body2" noWrap sx={{overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                                        {t('signedInAs', {username: currentSession?.displayName || authenticatedUsername})}
+                                    </Typography>
+                                </Button>
+                            )}
+                            {currentSession?.isReadOnly && (
+                                <Chip
+                                    label={t('roleViewerBadge')}
+                                    size="small"
+                                    color="default"
+                                    variant="outlined"
+                                    sx={{display: {xs: 'none', md: 'inline-flex'}}}
+                                />
                             )}
                             <Button color="inherit" size="small" onClick={handleLogout}>
                                 {t('logOut')}
                             </Button>
                             <LanguageSelector />
+                            {!sandboxStatus.sandboxMode && (
+                                <Tooltip title={coachUi.walkthroughButtonHint} arrow placement="top">
+                                    <Button
+                                        color={coachOpen ? "primary" : "inherit"}
+                                        variant={coachOpen ? "contained" : "outlined"}
+                                        size="small"
+                                        startIcon={<SchoolRoundedIcon fontSize="small" aria-hidden="true" />}
+                                        aria-pressed={coachOpen}
+                                        aria-label={coachUi.walkthroughButtonLabel}
+                                        data-testid="navbar-walkthrough-button"
+                                        onClick={() => setCoachOpen((prev) => !prev)}
+                                        sx={{
+                                            textTransform: "none",
+                                            fontWeight: 600,
+                                            flexShrink: 0,
+                                            minBlockSize: "34px",
+                                            "@media (pointer: coarse)": { minBlockSize: "44px" },
+                                            px: { xs: 1, lg: 1.25 },
+                                            "& .MuiButton-startIcon": {
+                                                mr: { xs: 0, lg: 0.75 },
+                                                ml: 0,
+                                            },
+                                        }}
+                                    >
+                                        <Box component="span" sx={{ display: { xs: "none", lg: "inline" } }}>
+                                            {coachUi.walkthroughButtonLabel}
+                                        </Box>
+                                    </Button>
+                                </Tooltip>
+                            )}
                             <Tooltip title={t('operatorHelp')} arrow placement="top">
                                 <IconButton
                                     color="inherit"
@@ -516,6 +847,7 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                                     id="settings-button"
                                     color="inherit"
                                     aria-label={t('openSettings')}
+                                    data-testid="navbar-settings-button"
                                     onClick={handleSettingsMenuOpen}
                                 >
                                     <Badge
@@ -535,6 +867,10 @@ export default function Navbar({children}: { children: React.ReactNode }) {
             <HelpDialog
                 open={helpDialogOpen}
                 onClose={() => setHelpDialogOpen(false)}
+                onOpenGuidedWalkthrough={() => {
+                    setHelpDialogOpen(false);
+                    setCoachOpen(true);
+                }}
                 activePathname={pathname ?? undefined}
                 nodes={configuredNodes}
                 stateSummary={{
@@ -702,14 +1038,77 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                         <Alert severity="error" sx={{mb: 2}}>
                             {viewError === "invalid"
                                 ? t('operationalViewInvalid')
-                                : t('operationalViewEmpty', {view: activeViewKey ?? ''})}
+                                : viewError === "unauthorized"
+                                    ? t('operationalViewUnauthorized', {view: activeViewKey ?? ''})
+                                    : t('operationalViewEmpty', {view: activeViewKey ?? ''})}
                         </Alert>
                     )}
                     <HeaderSlotProvider node={headerSlot}>
-                        {children}
+                        {sandboxStatus.sandboxMode && splitAdminOpen ? (
+                            <div className="oscar-sandbox-admin-split-shell" data-testid="sandbox-split-admin-shell">
+                                <Box
+                                    sx={{
+                                        px: 2,
+                                        py: 1,
+                                        bgcolor: "#0f172a",
+                                        color: "#f8fafc",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        gap: 1,
+                                        minInlineSize: 0,
+                                    }}
+                                >
+                                    <Stack direction="row" spacing={1} alignItems="center" sx={{minInlineSize: 0}}>
+                                        <SplitscreenRoundedIcon fontSize="small" sx={{color: "#fbbf24"}} />
+                                        <Typography variant="body2" fontWeight={700} noWrap>
+                                            SensorHub Admin (<code>/sensorhub/admin</code>) — {coachUi.sandboxBadge}
+                                        </Typography>
+                                    </Stack>
+                                    <Button
+                                        size="small"
+                                        variant="outlined"
+                                        color="inherit"
+                                        onClick={() => {
+                                            setSplitAdminOpen(false);
+                                            dispatchSandboxRefreshEvents({
+                                                lanes: true,
+                                                telemetry: true,
+                                                events: true,
+                                            });
+                                            refreshSandboxStatus();
+                                        }}
+                                        data-testid="sandbox-close-split-admin-btn"
+                                        sx={{textTransform: 'none', flexShrink: 0}}
+                                    >
+                                        {coachUi.closeSplitAdminLabel}
+                                    </Button>
+                                </Box>
+                                <iframe
+                                    title="OSCAR SensorHub Admin — Hands-On Training Sandbox"
+                                    src="/sensorhub/admin"
+                                    className="oscar-sandbox-admin-iframe"
+                                    data-testid="sandbox-admin-iframe"
+                                />
+                            </div>
+                        ) : (
+                            children
+                        )}
                     </HeaderSlotProvider>
                 </Box>
             </Box>
+            {coachOpen && (
+                <TrainingCoachDock
+                    status={sandboxStatus}
+                    activePathname={pathname ?? "/"}
+                    onStatusUpdated={applyNextSandboxStatus}
+                    onRefreshRequested={refreshSandboxStatus}
+                    onNavigateRoute={(route) => router.push(scopedHref(route))}
+                    splitAdminOpen={splitAdminOpen}
+                    onToggleSplitAdmin={setSplitAdminOpen}
+                    onMinimize={() => setCoachOpen(false)}
+                />
+            )}
         </Box>
     );
 }

@@ -33,6 +33,7 @@ export interface UseVehicleOcrMapOptions {
     enabled: boolean;
     lanes: readonly LaneMapEntry[];
     windowStartIso: string;
+    windowEndIso?: string | null;
 }
 
 export interface VehicleOcrMapState {
@@ -47,6 +48,7 @@ export function useVehicleOcrMap({
     enabled,
     lanes,
     windowStartIso,
+    windowEndIso,
 }: UseVehicleOcrMapOptions): VehicleOcrMapState {
     const [ocrByObsId, setOcrByObsId] = useState<ReadonlyMap<string, IVehicleOcrResult>>(EMPTY_OCR_MAP);
     const [adjudicatedVehicleIdByObsId, setAdjudicatedVehicleIdByObsId] =
@@ -79,11 +81,11 @@ export function useVehicleOcrMap({
         }
         ids.sort();
         return {
-            key: `${windowStartIso}|${ids.join(",")}`,
+            key: `${windowStartIso}|${windowEndIso ?? ""}|${ids.join(",")}`,
             ocrEntries,
             adjEntries,
         };
-    }, [enabled, lanes, windowStartIso]);
+    }, [enabled, lanes, windowEndIso, windowStartIso]);
 
     useEffect(() => {
         if (!enabled) {
@@ -99,11 +101,13 @@ export function useVehicleOcrMap({
                 streamPlan.ocrEntries.map(entry => entry.stream),
                 windowStartIso,
                 controller.signal,
+                windowEndIso,
             ),
             fetchAdjudicatedVehicleIdsWindow(
                 streamPlan.adjEntries.map(entry => entry.stream),
                 windowStartIso,
                 controller.signal,
+                windowEndIso,
             ),
         ]).then(([ocrWindow, adjWindow]) => {
             if (!active || controller.signal.aborted) return;

@@ -4,8 +4,15 @@ import React, {useId, useMemo} from "react";
 import {Box, Button, Chip, Stack, Typography, useTheme} from "@mui/material";
 import {useLanguage} from "@/app/contexts/LanguageContext";
 import {
+    buildDisplayedUpSetColumns,
+    DisplayedUpSetColumnItem,
+    getUpSetCategoryBit,
+    orderUpSetSetsPopulatedFirst,
+    UPSET_OTHER_SNM_SYNTHETIC_MASK,
     UpSetCoOccurrencePayload,
+    UpSetFilterSelection,
     UpSetIntersectionItem,
+    UpSetSetTotalItem,
 } from "@/lib/data/oscar/adjudication/IsotopeMapping";
 
 const SNM_HIGHLIGHT_HEX = "#DC2626";
@@ -39,20 +46,26 @@ export interface UpSetPlotProps {
     maxIntersections?: number;
     selectedMask?: number | null;
     onSelectIntersection?: (intersection: UpSetIntersectionItem | null) => void;
+    selectedFilter?: UpSetFilterSelection | null;
+    onSelectFilter?: (selection: UpSetFilterSelection | null) => void;
     testId?: string;
 }
 
 /**
  * Accessible vector SVG UpSet intersection chart + paired semantic data table.
- * Models Lex et al. / Python upsetplot with SNM subsets highlighted in crimson (#DC2626)
- * plus a non-color concentric halo ring so SNM alarms remain distinguishable without color alone.
+ * Models Lex et al. / Python upsetplot with:
+ * - Populated main categories always listed first (selectable as filters when count > 0)
+ * - SNM subsets highlighted in crimson (#DC2626) plus a non-color concentric halo ring
+ * - Rare truncated SNM subsets rolled into a crimson "Other SNM" column so SNM bars always sum to the left total
  */
 export default function UpSetPlot({
     data,
     title,
-    maxIntersections = 16,
+    maxIntersections = 18,
     selectedMask = null,
     onSelectIntersection,
+    selectedFilter = null,
+    onSelectFilter,
     testId = "upset-cooccurrence-plot",
 }: UpSetPlotProps) {
     const {t, language} = useLanguage();
@@ -69,18 +82,137 @@ export default function UpSetPlot({
         return null;
     }
 
-    // Order rows bottom-up so the largest set (e.g. Gamma) sits directly above the horizontal Occupancies axis
-    const displaySets = [...data.sets].reverse();
+    const isInteractive = Boolean(onSelectFilter || onSelectIntersection);
+    const otherSnmLabel = t("upSetOtherSnmLabel");
+
+    // Always list populated categories (count > 0) first, followed by zero-count categories at the bottom
+    const displaySets = orderUpSetSetsPopulatedFirst(data.sets);
     const rowCount = displaySets.length;
-    const shownCols = data.intersections.slice(0, Math.max(1, maxIntersections));
+    const shownCols = buildDisplayedUpSetColumns(data.intersections, maxIntersections, otherSnmLabel);
     const colCount = shownCols.length;
+    const otherSnmCol = colCount > 0 && shownCols[colCount - 1].otherSnmRollup ? shownCols[colCount - 1] : null;
+
+    const activeFilter: UpSetFilterSelection | null = (() => {
+        if (selectedFilter != null) return selectedFilter;
+        if (selectedMask == null) return null;
+        if (selectedMask === UPSET_OTHER_SNM_SYNTHETIC_MASK && otherSnmCol) {
+            return {
+                kind: "otherSnm",
+                masks: otherSnmCol.rolledUpMasks,
+                excludedMasks: otherSnmCol.excludedSnmMasks,
+                label: otherSnmCol.label,
+                count: otherSnmCol.count,
+                snmPresent: true,
+            };
+        }
+        if (selectedMask < 0) {
+            const bit = -selectedMask;
+            const matchedSet = displaySets.find((s) => getUpSetCategoryBit(s.name) === bit);
+            if (matchedSet) {
+                return {
+                    kind: "category",
+                    setName: matchedSet.name,
+                    bit,
+                    label: matchedSet.name,
+                    count: matchedSet.count,
+                    snmPresent: Boolean(matchedSet.snm || matchedSet.name === "SNM"),
+                };
+            }
+        }
+        const matchedCol = data.intersections.find((c) => c.mask === selectedMask);
+        return {
+            kind: "intersection",
+            mask: selectedMask,
+            label: matchedCol?.label ?? "",
+            count: matchedCol?.count ?? 0,
+            snmPresent: Boolean(matchedCol?.snmPresent),
+        };
+    })();
+
+    const emitSelection = (next: UpSetFilterSelection | null, legacyItem: UpSetIntersectionItem | null) => {
+        if (onSelectFilter) {
+            onSelectFilter(next);
+        }
+        if (onSelectIntersection) {
+            onSelectIntersection(legacyItem);
+        }
+    };
+
+    const handleToggleCategory = (setItem: UpSetSetTotalItem) => {
+        if (!isInteractive || setItem.count <= 0) return;
+        const bit = getUpSetCategoryBit(setItem.name);
+        if (bit <= 0) return;
+        const isAlreadySelected = activeFilter?.kind === "category" && activeFilter.bit === bit;
+        if (isAlreadySelected) {
+            emitSelection(null, null);
+            return;
+        }
+        const snmPresent = Boolean(setItem.snm || setItem.name === "SNM");
+        emitSelection(
+            {
+                kind: "category",
+                setName: setItem.name,
+                bit,
+                label: setItem.name,
+                count: setItem.count,
+                snmPresent,
+            },
+            {
+                mask: -bit,
+                label: setItem.name,
+                sets: [setItem.name],
+                activeSets: [setItem.name],
+                count: setItem.count,
+                snmPresent,
+            },
+        );
+    };
+
+    const handleToggleColumn = (col: DisplayedUpSetColumnItem) => {
+        if (!isInteractive || col.count <= 0) return;
+        if (col.otherSnmRollup) {
+            const isAlreadySelected = activeFilter?.kind === "otherSnm";
+            if (isAlreadySelected) {
+                emitSelection(null, null);
+                return;
+            }
+            emitSelection(
+                {
+                    kind: "otherSnm",
+                    masks: col.rolledUpMasks,
+                    excludedMasks: col.excludedSnmMasks,
+                    label: col.label,
+                    count: col.count,
+                    snmPresent: true,
+                },
+                col,
+            );
+            return;
+        }
+        const mask = col.mask ?? 0;
+        const isAlreadySelected = activeFilter?.kind === "intersection" && activeFilter.mask === mask;
+        if (isAlreadySelected) {
+            emitSelection(null, null);
+            return;
+        }
+        emitSelection(
+            {
+                kind: "intersection",
+                mask,
+                label: col.label,
+                count: col.count,
+                snmPresent: col.snmPresent,
+            },
+            col,
+        );
+    };
 
     const svgWidth = Math.max(680, 290 + colCount * 36);
     const headerH = 26;
     const interPlotH = 132;
     const rowH = 22;
     const matrixH = rowCount * rowH;
-    const bottomAxisH = 38;
+    const bottomAxisH = 44;
     const svgHeight = headerH + interPlotH + 14 + matrixH + bottomAxisH;
 
     const leftCountPad = 48;
@@ -188,19 +320,31 @@ export default function UpSetPlot({
                             {t("upSetSnmLegend")}
                         </Typography>
                     </Stack>
-                    {selectedMask != null && onSelectIntersection && (
+                    {activeFilter != null && isInteractive && (
                         <Chip
                             size="small"
-                            color="info"
-                            onDelete={() => onSelectIntersection(null)}
-                            label={t("upSetActiveSubsetFilter")}
+                            color={activeFilter.snmPresent ? "error" : "info"}
+                            onClick={() => emitSelection(null, null)}
+                            onDelete={() => emitSelection(null, null)}
+                            label={
+                                activeFilter.kind === "category"
+                                    ? t("upSetActiveCategoryFilter", { label: activeFilter.label })
+                                    : activeFilter.label
+                                        ? t("upSetActiveFilterWithLabel", { label: activeFilter.label })
+                                        : t("upSetActiveSubsetFilter")
+                            }
                             data-testid="upset-clear-filter-chip"
                         />
                     )}
                 </Stack>
             </Stack>
 
-            <Box sx={{ width: "100%", overflowX: "auto" }}>
+            <Box
+                role="region"
+                aria-labelledby={svgTitleId}
+                tabIndex={0}
+                sx={{ width: "100%", overflowX: "auto" }}
+            >
                 <svg
                     role="img"
                     aria-labelledby={`${svgTitleId} ${svgDescId}`}
@@ -274,26 +418,61 @@ export default function UpSetPlot({
                         {t("occupancies")}
                     </text>
 
-                    {/* Set rows: zebra bands + right-to-left set totals + set labels */}
+                    {/* Set rows: zebra bands + right-to-left set totals + set labels (populated first, clickable when count > 0) */}
                     {displaySets.map((setItem, r) => {
                         const rowTop = matrixTopY + r * rowH;
                         const rowCenterY = rowTop + rowH / 2;
                         const isSnmRow = Boolean(setItem.snm || setItem.name === "SNM");
+                        const isPopulated = setItem.count > 0;
+                        const catBit = getUpSetCategoryBit(setItem.name);
+                        const isCategorySelected =
+                            activeFilter?.kind === "category" && catBit > 0 && activeFilter.bit === catBit;
+                        const canClickCategory = isInteractive && isPopulated && catBit > 0;
                         const frac = Math.min(1, setItem.count / xAxisMax);
-                        const hBarW = setItem.count > 0 ? Math.max(2.5, frac * totalsBarW) : 0;
+                        const hBarW = isPopulated ? Math.max(2.5, frac * totalsBarW) : 0;
                         const hBarH = rowH * 0.56;
                         const barFill = isSnmRow ? SNM_HIGHLIGHT_HEX : inkPrimary;
 
                         return (
-                            <g key={`set-row-${setItem.name}`}>
-                                {r % 2 === 0 && (
+                            <g
+                                key={`set-row-${setItem.name}`}
+                                data-testid={`upset-cat-row-${setItem.name}`}
+                                data-populated={isPopulated ? "true" : "false"}
+                                style={{
+                                    cursor: canClickCategory ? "pointer" : "default",
+                                    opacity: isPopulated ? 1 : 0.55,
+                                }}
+                                onClick={canClickCategory ? () => handleToggleCategory(setItem) : undefined}
+                            >
+                                {isCategorySelected ? (
                                     <rect
-                                        x={totalsZeroX + 4}
+                                        x={2}
                                         y={rowTop}
-                                        width={matrixRightX - (totalsZeroX + 4)}
+                                        width={matrixRightX - 2}
                                         height={rowH}
-                                        fill={zebraFill}
-                                        rx={2}
+                                        fill={selectedColFill}
+                                        rx={3}
+                                    />
+                                ) : (
+                                    r % 2 === 0 && (
+                                        <rect
+                                            x={totalsZeroX + 4}
+                                            y={rowTop}
+                                            width={matrixRightX - (totalsZeroX + 4)}
+                                            height={rowH}
+                                            fill={zebraFill}
+                                            rx={2}
+                                        />
+                                    )
+                                )}
+                                {/* Transparent hit target across left bar + category label for pointer precision */}
+                                {canClickCategory && (
+                                    <rect
+                                        x={2}
+                                        y={rowTop}
+                                        width={totalsZeroX + labelZoneW - 2}
+                                        height={rowH}
+                                        fill="transparent"
                                     />
                                 )}
                                 {hBarW > 0 && (
@@ -311,7 +490,7 @@ export default function UpSetPlot({
                                     y={rowCenterY + 3.8}
                                     textAnchor="end"
                                     fontSize="10.5"
-                                    fontWeight={isSnmRow ? 700 : 400}
+                                    fontWeight={isSnmRow || isCategorySelected ? 700 : 400}
                                     fill={isSnmRow ? SNM_HIGHLIGHT_HEX : inkSecondary}
                                 >
                                     {intFmt.format(setItem.count)}
@@ -321,7 +500,7 @@ export default function UpSetPlot({
                                     y={rowCenterY + 4}
                                     textAnchor="end"
                                     fontSize="11.5"
-                                    fontWeight={isSnmRow ? 700 : 500}
+                                    fontWeight={isSnmRow || isCategorySelected ? 700 : 500}
                                     fill={isSnmRow ? SNM_HIGHLIGHT_HEX : inkPrimary}
                                 >
                                     {setItem.name}
@@ -382,41 +561,49 @@ export default function UpSetPlot({
                         {t("occupancies")}
                     </text>
 
-                    {/* Intersection columns: vertical bars + connected dot matrix */}
+                    {/* Intersection columns: vertical bars + connected dot matrix (+ crimson "Other SNM" rollup when capped) */}
                     {shownCols.map((col, c) => {
                         const colCenterX = matrixLeftX + (c + 0.5) * slotW;
                         const activeColor = col.snmPresent ? SNM_HIGHLIGHT_HEX : inkPrimary;
                         const vFrac = Math.min(1, col.count / yAxisMax);
                         const vBarH = col.count > 0 ? Math.max(2.5, vFrac * barDrawH) : 0;
-                        const isSelected = selectedMask != null && col.mask === selectedMask;
+                        const isSelected = col.otherSnmRollup
+                            ? activeFilter?.kind === "otherSnm"
+                            : activeFilter?.kind === "intersection" && col.mask != null && col.mask === activeFilter.mask;
 
                         const memberSets = Array.isArray(col.sets)
                             ? col.sets
                             : Array.isArray(col.activeSets)
                                 ? col.activeSets
                                 : [];
-                        let firstActive = -1;
-                        let lastActive = -1;
-                        const activeRowFlags = displaySets.map((s, r) => {
-                            const active = memberSets.includes(s.name);
-                            if (active) {
-                                if (firstActive < 0) firstActive = r;
-                                lastActive = r;
+                        const coSets = col.otherSnmRollup ? col.coOccurringSets : [];
+                        let firstSpan = -1;
+                        let lastSpan = -1;
+                        const primaryRowFlags: boolean[] = [];
+                        const coRowFlags: boolean[] = [];
+                        displaySets.forEach((s, r) => {
+                            const isPrimary = memberSets.includes(s.name);
+                            const isCo = coSets.includes(s.name);
+                            primaryRowFlags.push(isPrimary);
+                            coRowFlags.push(isCo);
+                            if (isPrimary || isCo) {
+                                if (firstSpan < 0) firstSpan = r;
+                                lastSpan = r;
                             }
-                            return active;
                         });
+
+                        const colTestSlug = col.otherSnmRollup
+                            ? "Other-SNM"
+                            : col.label.replace(/\s+\+\s+/g, "-");
 
                         return (
                             <g
-                                key={`inter-col-${col.mask ?? col.label}`}
-                                data-testid={`upset-col-${col.label.replace(/\s+\+\s+/g, "-")}`}
+                                key={`inter-col-${col.otherSnmRollup ? "other-snm" : col.mask ?? col.label}`}
+                                data-testid={`upset-col-${colTestSlug}`}
                                 data-snm={col.snmPresent ? "true" : "false"}
-                                style={{ cursor: onSelectIntersection ? "pointer" : "default" }}
-                                onClick={
-                                    onSelectIntersection
-                                        ? () => onSelectIntersection(isSelected ? null : col)
-                                        : undefined
-                                }
+                                data-other-snm={col.otherSnmRollup ? "true" : "false"}
+                                style={{ cursor: isInteractive ? "pointer" : "default" }}
+                                onClick={isInteractive ? () => handleToggleColumn(col) : undefined}
                             >
                                 {isSelected && (
                                     <rect
@@ -450,7 +637,7 @@ export default function UpSetPlot({
                                 </text>
 
                                 {displaySets.map((s, r) => {
-                                    if (activeRowFlags[r]) return null;
+                                    if (primaryRowFlags[r] || coRowFlags[r]) return null;
                                     const ry = matrixTopY + r * rowH + rowH / 2;
                                     return (
                                         <circle
@@ -463,79 +650,204 @@ export default function UpSetPlot({
                                     );
                                 })}
 
-                                {firstActive >= 0 && lastActive > firstActive && (
+                                {firstSpan >= 0 && lastSpan > firstSpan && (
                                     <line
                                         x1={colCenterX}
-                                        y1={matrixTopY + firstActive * rowH + rowH / 2}
+                                        y1={matrixTopY + firstSpan * rowH + rowH / 2}
                                         x2={colCenterX}
-                                        y2={matrixTopY + lastActive * rowH + rowH / 2}
+                                        y2={matrixTopY + lastSpan * rowH + rowH / 2}
                                         stroke={activeColor}
-                                        strokeWidth={2.4}
+                                        strokeWidth={col.otherSnmRollup ? 1.8 : 2.4}
+                                        strokeDasharray={col.otherSnmRollup ? "3 2.5" : undefined}
                                     />
                                 )}
 
                                 {displaySets.map((s, r) => {
-                                    if (!activeRowFlags[r]) return null;
                                     const ry = matrixTopY + r * rowH + rowH / 2;
-                                    return (
-                                        <g key={`active-${s.name}-${c}`}>
-                                            <circle
-                                                cx={colCenterX}
-                                                cy={ry}
-                                                r={dotRadius}
-                                                fill={activeColor}
-                                            />
-                                            {col.snmPresent && (
+                                    if (primaryRowFlags[r]) {
+                                        return (
+                                            <g key={`active-${s.name}-${c}`}>
                                                 <circle
                                                     cx={colCenterX}
                                                     cy={ry}
-                                                    r={dotRadius + 2.4}
-                                                    fill="none"
-                                                    stroke={SNM_HIGHLIGHT_HEX}
-                                                    strokeWidth={1.35}
+                                                    r={dotRadius}
+                                                    fill={activeColor}
                                                 />
-                                            )}
-                                        </g>
-                                    );
+                                                {col.snmPresent && (
+                                                    <circle
+                                                        cx={colCenterX}
+                                                        cy={ry}
+                                                        r={dotRadius + 2.4}
+                                                        fill="none"
+                                                        stroke={SNM_HIGHLIGHT_HEX}
+                                                        strokeWidth={1.35}
+                                                    />
+                                                )}
+                                            </g>
+                                        );
+                                    }
+                                    if (coRowFlags[r]) {
+                                        return (
+                                            <circle
+                                                key={`coactive-${s.name}-${c}`}
+                                                cx={colCenterX}
+                                                cy={ry}
+                                                r={dotRadius * 0.88}
+                                                fill={isDark ? "#0F172A" : "#FFFFFF"}
+                                                stroke={SNM_HIGHLIGHT_HEX}
+                                                strokeWidth={1.35}
+                                            />
+                                        );
+                                    }
+                                    return null;
                                 })}
+
+                                {col.otherSnmRollup && (
+                                    <text
+                                        x={Math.min(matrixRightX - 2, colCenterX)}
+                                        y={matrixBottomY + 13}
+                                        textAnchor={c === colCount - 1 ? "end" : "middle"}
+                                        fontSize="9.5"
+                                        fontWeight={700}
+                                        fill={SNM_HIGHLIGHT_HEX}
+                                    >
+                                        {col.label}
+                                    </text>
+                                )}
                             </g>
                         );
                     })}
+
+                    {/* Footer note inside bottom-right of SVG when combinations were capped */}
+                    {(otherSnmCol != null || data.intersections.length > colCount) && (
+                        <text
+                            x={matrixRightX}
+                            y={matrixBottomY + 30}
+                            textAnchor="end"
+                            fontSize="10"
+                            fill={inkSecondary}
+                        >
+                            {otherSnmCol != null
+                                ? t("upSetShowingTopWithOtherSnm", {
+                                      shown: Math.max(0, colCount - 1),
+                                      total: data.intersections.length,
+                                      otherSnmLabel: otherSnmCol.label,
+                                      otherSnmCount: intFmt.format(otherSnmCol.count),
+                                      occupancies: intFmt.format(data.totalOccupancies),
+                                  })
+                                : t("upSetShowingTop", {
+                                      shown: colCount,
+                                      total: data.intersections.length,
+                                      occupancies: intFmt.format(data.totalOccupancies),
+                                  })}
+                        </text>
+                    )}
                 </svg>
             </Box>
 
-            {onSelectIntersection && (
-                <Stack
-                    role="group"
-                    direction="row"
-                    spacing={0.75}
-                    useFlexGap
-                    flexWrap="wrap"
-                    sx={{ mt: 1 }}
-                    aria-label={t("upSetFilterButtonsLabel")}
-                >
-                    {shownCols.map((col) => {
-                        const isSelected = selectedMask != null && col.mask === selectedMask;
-                        return (
-                            <Button
-                                key={`subset-btn-${col.mask ?? col.label}`}
-                                type="button"
-                                size="small"
-                                variant={isSelected ? "contained" : "outlined"}
-                                color={col.snmPresent ? "error" : "primary"}
-                                aria-pressed={isSelected}
-                                onClick={() => onSelectIntersection(isSelected ? null : col)}
-                                sx={{
-                                    minBlockSize: "36px",
-                                    "@media (pointer: coarse)": { minBlockSize: "44px" },
-                                    textTransform: "none",
-                                    fontSize: "0.75rem",
-                                }}
-                            >
-                                {`${col.label} (${intFmt.format(col.count)})`}
-                            </Button>
-                        );
-                    })}
+            {isInteractive && (
+                <Stack spacing={1} sx={{ mt: 1.25 }}>
+                    <Stack
+                        role="group"
+                        direction="row"
+                        spacing={0.75}
+                        alignItems="center"
+                        useFlexGap
+                        flexWrap="wrap"
+                        aria-label={t("upSetCategoryFilterButtonsLabel")}
+                        data-testid="upset-category-filter-group"
+                    >
+                        <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ fontWeight: 700, mr: 0.25 }}
+                        >
+                            {t("upSetCategoryFiltersHeading")}
+                        </Typography>
+                        {displaySets.map((setItem) => {
+                            const isSnmRow = Boolean(setItem.snm || setItem.name === "SNM");
+                            const isPopulated = setItem.count > 0;
+                            const bit = getUpSetCategoryBit(setItem.name);
+                            const isSelected =
+                                isPopulated && activeFilter?.kind === "category" && bit > 0 && activeFilter.bit === bit;
+                            return (
+                                <Button
+                                    key={`cat-btn-${setItem.name}`}
+                                    type="button"
+                                    size="small"
+                                    disabled={!isPopulated}
+                                    variant={isSelected ? "contained" : "outlined"}
+                                    color={isSnmRow ? "error" : "primary"}
+                                    aria-pressed={isPopulated ? isSelected : undefined}
+                                    data-testid={`upset-cat-btn-${setItem.name}`}
+                                    data-populated={isPopulated ? "true" : "false"}
+                                    onClick={() => handleToggleCategory(setItem)}
+                                    sx={{
+                                        minBlockSize: "36px",
+                                        "@media (pointer: coarse)": {
+                                            minBlockSize: "44px",
+                                            minInlineSize: "44px",
+                                        },
+                                        textTransform: "none",
+                                        fontSize: "0.75rem",
+                                    }}
+                                >
+                                    {`${setItem.name} (${intFmt.format(setItem.count)})`}
+                                </Button>
+                            );
+                        })}
+                    </Stack>
+
+                    <Stack
+                        role="group"
+                        direction="row"
+                        spacing={0.75}
+                        alignItems="center"
+                        useFlexGap
+                        flexWrap="wrap"
+                        aria-label={t("upSetFilterButtonsLabel")}
+                        data-testid="upset-combination-filter-group"
+                    >
+                        <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ fontWeight: 700, mr: 0.25 }}
+                        >
+                            {t("upSetCombinationFiltersHeading")}
+                        </Typography>
+                        {shownCols.map((col) => {
+                            const isSelected = col.otherSnmRollup
+                                ? activeFilter?.kind === "otherSnm"
+                                : activeFilter?.kind === "intersection" && col.mask != null && col.mask === activeFilter.mask;
+                            return (
+                                <Button
+                                    key={`subset-btn-${col.otherSnmRollup ? "other-snm" : col.mask ?? col.label}`}
+                                    type="button"
+                                    size="small"
+                                    variant={isSelected ? "contained" : "outlined"}
+                                    color={col.snmPresent ? "error" : "primary"}
+                                    aria-pressed={isSelected}
+                                    data-testid={
+                                        col.otherSnmRollup
+                                            ? "upset-col-btn-Other-SNM"
+                                            : `upset-col-btn-${col.label.replace(/\s+\+\s+/g, "-")}`
+                                    }
+                                    onClick={() => handleToggleColumn(col)}
+                                    sx={{
+                                        minBlockSize: "36px",
+                                        "@media (pointer: coarse)": {
+                                            minBlockSize: "44px",
+                                            minInlineSize: "44px",
+                                        },
+                                        textTransform: "none",
+                                        fontSize: "0.75rem",
+                                    }}
+                                >
+                                    {`${col.label} (${intFmt.format(col.count)})`}
+                                </Button>
+                            );
+                        })}
+                    </Stack>
                 </Stack>
             )}
 

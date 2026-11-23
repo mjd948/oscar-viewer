@@ -108,15 +108,30 @@ export class VehicleOcrResult implements IVehicleOcrResult {
             return null;
         }
         const kind = normalizeKind(result?.idType ?? result?.ocrKind ?? result?.kind);
-        const explicitChecksum = typeof result?.checksumValid === "boolean"
+        const rawFrames = Number(result?.readCount ?? result?.frameCount ?? 1);
+        const frameCount = Number.isFinite(rawFrames) && rawFrames >= 1 ? Math.trunc(rawFrames) : 1;
+        const rawExplicitChecksum = typeof result?.checksumValid === "boolean"
             ? result.checksumValid
             : typeof result?.isoChecksumValid === "boolean"
                 ? result.isoChecksumValid
                 : (kind === "container" && isValidIso6346(canonicalValue));
+        // Guard historical single-frame observations where a 10-character prefix had its 11th
+        // check digit synthesized or overwritten without optical confirmation: keep as a clickable
+        // suggestion chip (isoChecksumValid = false) rather than auto-filling Vehicle ID.
+        const rawAlnum = typeof result?.value === "string"
+            ? result.value.toUpperCase().replace(/[^A-Z0-9]/g, "")
+            : "";
+        const singleFrameSynthesizedCheckDigit = kind === "container"
+            && frameCount === 1
+            && Boolean(result?.normalizedValue)
+            && rawAlnum.length > 0
+            && (rawAlnum.length < 11
+                || (canonicalValue.length === 11
+                    && rawAlnum.includes(canonicalValue.slice(0, 10))
+                    && !rawAlnum.includes(canonicalValue)));
+        const explicitChecksum = rawExplicitChecksum && !singleFrameSynthesizedCheckDigit;
         const rawConf = Number(result?.confidence ?? 0);
         const confidence = Number.isFinite(rawConf) ? Math.max(0, Math.min(1, rawConf)) : 0;
-        const rawFrames = Number(result?.readCount ?? result?.frameCount ?? 1);
-        const frameCount = Number.isFinite(rawFrames) && rawFrames >= 1 ? Math.trunc(rawFrames) : 1;
         const time = normalizeInstant(
             props.resultTime
             ?? props.phenomenonTime
@@ -206,6 +221,11 @@ export function selectAutoFillCandidate(
     );
     if (validContainer) {
         return validContainer;
+    }
+    // Do not overwrite Vehicle ID with a background plate token when a high-confidence container
+    // candidate is already ranked ahead of it as a clickable suggestion chip.
+    if (deduped.some(item => item.kind === "container" && item.confidence >= 0.82)) {
+        return null;
     }
     const confidentPlate = deduped.find(
         item => item.kind === "plate" && item.confidence >= plateMinConfidence,

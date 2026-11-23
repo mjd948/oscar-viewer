@@ -54,3 +54,34 @@ a, a:hover, a:focus, a:active {
     display: none !important;
   }
 }
+
+.oscar-coach-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+  background-color: rgba(15, 23, 42, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+[data-oscar-coach-spotlight="true"] {
+  outline: 3px solid #f59e0b !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.36) !important;
+  border-radius: 6px;
+  animation: oscarCoachPulse 1.1s ease-in-out 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-oscar-coach-spotlight="true"] {
+    animation: none;
+  }
+}
+
+@keyframes oscarCoachPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.30);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(245, 158, 11, 0.55);
+  }
+}

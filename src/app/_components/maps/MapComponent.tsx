@@ -61,6 +61,8 @@ import {
     walkerIconHtml,
     walkerState,
 } from "@/app/_components/maps/MapUtils";
+import {fetchActiveOfflineMapInfo} from "@/lib/data/oscar/RuntimeExtensionsApi";
+import {createLeafletPmTilesLayer, isValidOfflineMapBounds} from "@/app/_components/maps/PmTilesLayerFactory";
 
 interface LaneMarkerState {
     laneName: string;
@@ -92,6 +94,10 @@ export default function MapComponent({containerId = "mapcontainer", height = "10
     const mapcontainer: string = containerId;
     const laneMap = useSelector((state: RootState) => selectLaneMap(state));
     const leafletViewRef = useRef<typeof LeafletView | null>(null);
+    const osmLayerRef = useRef<L.TileLayer | null>(null);
+    const esriLayerRef = useRef<L.TileLayer | null>(null);
+    const offlinePmLayerRef = useRef<L.Layer | null>(null);
+    const offlineBoundsRef = useRef<L.LatLngBounds | null>(null);
     const siteDiagramLayersRef = useRef<Map<string, L.ImageOverlay>>(new Map());
     const siteDiagramBoundsRef = useRef<L.LatLngBounds | null>(null);
     const laneMarkerLayersRef = useRef<Map<string, L.Marker>>(new Map());
@@ -150,6 +156,17 @@ export default function MapComponent({containerId = "mapcontainer", height = "10
             try {
                 view.map.invalidateSize({pan: false, animate: false});
                 view.map.fitBounds(siteDiagramBoundsRef.current, SITE_DIAGRAM_FIT_OPTIONS);
+            } finally {
+                isProgrammaticViewChangeRef.current = false;
+            }
+            return;
+        }
+
+        if (offlineBoundsRef.current?.isValid()) {
+            isProgrammaticViewChangeRef.current = true;
+            try {
+                view.map.invalidateSize({pan: false, animate: false});
+                view.map.fitBounds(offlineBoundsRef.current, {animate: false});
             } finally {
                 isProgrammaticViewChangeRef.current = false;
             }
@@ -580,6 +597,9 @@ export default function MapComponent({containerId = "mapcontainer", height = "10
             if (!view.map.hasLayer(osmLayer))
                 osmLayer.addTo(view.map);
 
+            osmLayerRef.current = osmLayer;
+            esriLayerRef.current = esriLayer;
+
             hasUserAdjustedViewRef.current = false;
             leafletViewRef.current = view;
             setIsInit(true);
@@ -589,12 +609,69 @@ export default function MapComponent({containerId = "mapcontainer", height = "10
             if(isInit && leafletViewRef.current != null){
                 siteDiagramLayersRef.current.clear();
                 siteDiagramBoundsRef.current = null;
+                offlineBoundsRef.current = null;
+                offlinePmLayerRef.current = null;
+                osmLayerRef.current = null;
+                esriLayerRef.current = null;
                 laneMarkerLayersRef.current.clear();
                 leafletViewRef.current.destroy();
                 leafletViewRef.current = undefined;
             }
         }
     }, [isInit]);
+
+    useEffect(() => {
+        const view = leafletViewRef.current;
+        if (!view?.map || !isInit) return;
+        let cancelled = false;
+
+        void (async () => {
+            const activeMap = await fetchActiveOfflineMapInfo();
+            if (cancelled || leafletViewRef.current !== view || !activeMap.active) {
+                return;
+            }
+            const pmLayer = createLeafletPmTilesLayer(activeMap, language);
+            if (!pmLayer) {
+                return;
+            }
+            offlinePmLayerRef.current = pmLayer;
+            if (isValidOfflineMapBounds(activeMap.bounds)) {
+                offlineBoundsRef.current = L.latLngBounds(activeMap.bounds);
+            }
+
+            if (activeMap.defaultBasemap) {
+                if (osmLayerRef.current && view.map.hasLayer(osmLayerRef.current)) {
+                    view.map.removeLayer(osmLayerRef.current);
+                }
+                pmLayer.addTo(view.map);
+            }
+
+            // Replace LeafletView's anonymous base-layer control so operators can toggle
+            // seamlessly between the Offline PMTiles pack, OSM Streets, and Esri Satellite.
+            const existingCtrlEl = view.map.getContainer()?.querySelector('.leaflet-control-layers');
+            if (existingCtrlEl && existingCtrlEl.parentElement) {
+                existingCtrlEl.parentElement.removeChild(existingCtrlEl);
+            }
+            const offlineLabel = `Offline: ${activeMap.displayName || activeMap.fileName || 'PMTiles'}`;
+            const baseLayers: Record<string, L.Layer> = {
+                [offlineLabel]: pmLayer,
+            };
+            if (osmLayerRef.current) baseLayers[t('osmStreets')] = osmLayerRef.current;
+            if (esriLayerRef.current) baseLayers[t('esriSatellite')] = esriLayerRef.current;
+            L.control.layers(baseLayers, {}).addTo(view.map);
+
+            if (!hasUserAdjustedViewRef.current
+                && locationListRef.current.length === 0
+                && !siteDiagramBoundsRef.current?.isValid()
+                && offlineBoundsRef.current?.isValid()) {
+                fitMapToActiveExtent(false);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [fitMapToActiveExtent, isInit, language, t]);
 
     useEffect(() => {
         if (previousLanguageRef.current === language) return;

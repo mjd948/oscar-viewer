@@ -19,6 +19,32 @@ import { attemptMediaPlayback } from "@/lib/media/MediaPlayback";
 const PORTAL_ALARM_BRIDGE_MS = 8_000;
 
 let alarmAudio: HTMLAudioElement | null = null;
+let gestureUnlockInFlight = false;
+
+export function clampAlarmVolume(volumePercent: number): number {
+    if (!Number.isFinite(volumePercent)) {
+        return 0;
+    }
+    return Math.max(0, Math.min(1, volumePercent / 100));
+}
+
+export function applyAlarmAudioVolume(volumePercent: number): void {
+    if (!alarmAudio) {
+        return;
+    }
+    const normalized = clampAlarmVolume(volumePercent);
+    alarmAudio.volume = normalized;
+    if (!gestureUnlockInFlight) {
+        alarmAudio.muted = normalized <= 0;
+        if (normalized <= 0) {
+            alarmAudio.loop = false;
+            if (!alarmAudio.paused) {
+                alarmAudio.pause();
+            }
+            alarmAudio.currentTime = 0;
+        }
+    }
+}
 
 export function getAlarmAudio() {
     if (!alarmAudio) {
@@ -29,6 +55,7 @@ export function getAlarmAudio() {
 }
 
 export function resetAlarmAudioForTest() {
+    gestureUnlockInFlight = false;
     if (alarmAudio) {
         alarmAudio.loop = false;
         alarmAudio.pause();
@@ -52,6 +79,8 @@ export default function AlarmAudio() {
     const prevUnreadCountRef = useRef<number>(unreadCount);
     const prevAckNonceRef = useRef<number>(acknowledgeNonce);
     const wasLoopingRef = useRef<boolean>(false);
+    const savedVolumeRef = useRef<number>(savedVolume);
+    savedVolumeRef.current = savedVolume;
 
     const clearPortalBridge = () => {
         if (portalBridgeTimerRef.current !== null) {
@@ -74,6 +103,11 @@ export default function AlarmAudio() {
         }
     }, []);
 
+    // Apply volume and mute changes immediately mid-playback (including non-looping one-shot alarms).
+    useEffect(() => {
+        applyAlarmAudioVolume(savedVolume);
+    }, [savedVolume]);
+
     useEffect(() => {
         if (!soundLocked) {
             return;
@@ -87,10 +121,10 @@ export default function AlarmAudio() {
             }
 
             unlockInFlight = true;
+            gestureUnlockInFlight = true;
             const audio = getAlarmAudio();
-            const previousMuted = audio.muted;
             audio.muted = true;
-            audio.volume = Math.max(0, Math.min(1, savedVolume / 100));
+            audio.volume = clampAlarmVolume(savedVolumeRef.current);
 
             try {
                 const result = await attemptMediaPlayback(audio);
@@ -103,14 +137,15 @@ export default function AlarmAudio() {
                     console.error("Unable to initialize alarm audio", result.error);
                 }
             } finally {
-                audio.muted = previousMuted;
+                gestureUnlockInFlight = false;
+                applyAlarmAudioVolume(savedVolumeRef.current);
                 unlockInFlight = false;
             }
         };
 
         document.addEventListener("click", unlockAudio);
         return () => document.removeEventListener("click", unlockAudio);
-    }, [savedVolume, soundLocked]);
+    }, [soundLocked]);
 
     // Clear transient portal-entry bridge as soon as the occupancy arrives as an unread row,
     // transitions back to 0 unread rows, or an operator clicks Acknowledge All.
@@ -151,7 +186,7 @@ export default function AlarmAudio() {
 
         const audio = getAlarmAudio();
         audio.loop = false;
-        audio.volume = Math.max(0, Math.min(1, savedVolume / 100));
+        applyAlarmAudioVolume(savedVolume);
 
         void attemptMediaPlayback(audio).then(result => {
             if (result.status === "blocked") {
@@ -171,8 +206,8 @@ export default function AlarmAudio() {
 
         if (shouldLoop) {
             const audio = getAlarmAudio();
+            applyAlarmAudioVolume(savedVolume);
             audio.loop = true;
-            audio.volume = Math.max(0, Math.min(1, savedVolume / 100));
             wasLoopingRef.current = true;
             if (audio.paused) {
                 void attemptMediaPlayback(audio).then(result => {

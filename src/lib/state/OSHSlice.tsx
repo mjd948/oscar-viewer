@@ -79,6 +79,7 @@ function rehydrateNode(obj: any): Node {
 
 function serializeNode(node: INode) {
     return {
+        id: node.id,
         name: node.name,
         address: node.address,
         port: node.port,
@@ -88,6 +89,9 @@ function serializeNode(node: INode) {
         isSecure: node.isSecure,
         authenticationMode: node.authenticationMode,
         isDefaultNode: node.isDefaultNode,
+        customNameSet: Boolean(node.customNameSet),
+        serverNodeUid: node.serverNodeUid,
+        serverNodeName: node.serverNodeName,
         siteMapPath: node.siteMapPath,
         lowerLeftBound: node.lowerLeftBound,
         upperRightBound: node.upperRightBound,
@@ -115,17 +119,34 @@ export const Slice = createSlice({
             persistNodes(state.nodes);
         },
         updateNode: (state, action: PayloadAction<INode>) => {
-            const nodeIndex = state.nodes.findIndex((node: INode) => node.name === action.payload.name);
+            let nodeIndex = state.nodes.findIndex((node: INode) => node.id === action.payload.id);
+            if (nodeIndex === -1) {
+                nodeIndex = state.nodes.findIndex(
+                    (node: INode) => node.address === action.payload.address && node.port === action.payload.port,
+                );
+            }
+            if (nodeIndex === -1) {
+                nodeIndex = state.nodes.findIndex((node: INode) => node.name === action.payload.name);
+            }
 
             if (nodeIndex !== -1) {
                 state.nodes[nodeIndex] = action.payload as Node;
                 persistNodes(state.nodes);
+                if (state.configNode && (
+                    state.configNode.id === action.payload.id ||
+                    (state.configNode.isDefaultNode && action.payload.isDefaultNode)
+                )) {
+                    state.configNode = action.payload as Node;
+                    persistConfigNode(state.configNode);
+                }
             }
         },
         removeNode: (state, action: PayloadAction<string>) => {
             const nodeIndex = state.nodes.findIndex((node: INode) => node.id === action.payload);
-            state.nodes.splice(nodeIndex, 1);
-            persistNodes(state.nodes);
+            if (nodeIndex !== -1) {
+                state.nodes.splice(nodeIndex, 1);
+                persistNodes(state.nodes);
+            }
         },
         changeConfigNode: (state, action: PayloadAction<INode>) => {
             state.configNode = action.payload;

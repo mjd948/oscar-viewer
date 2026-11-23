@@ -26,9 +26,21 @@ import {
 } from '@mui/material';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded';
+import GpsFixedRoundedIcon from '@mui/icons-material/GpsFixedRounded';
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 import PlayCircleOutlineRoundedIcon from '@mui/icons-material/PlayCircleOutlineRounded';
+import SystemUpdateAltRoundedIcon from '@mui/icons-material/SystemUpdateAltRounded';
+import Link from 'next/link';
 import { Locale, useLanguage } from '@/app/contexts/LanguageContext';
+import {
+    CONSOLE_PAGE_CARD_ICON_KEYS,
+    PLATFORM_ICONS,
+    PlatformIconBadge,
+    PlatformIconKey,
+    renderTextWithIconsAndCode,
+    TOP_BAR_TOOL_ICON_KEYS,
+    triggerPlatformSpotlight,
+} from '@/app/_components/common/PlatformIcons';
 import {
     exportSupportBundle,
     SupportBundleExportResult,
@@ -39,14 +51,47 @@ import {
     CONSOLE_PAGE_CARD_GUIDE_SLUGS,
     getContextualVideoGuidesForPath,
     getVideoGuideBySlug,
+    getVideoGuideCaptionTracks,
     GLOSSARY_INDEX_GUIDE_SLUGS,
     REPORT_CARD_GUIDE_SLUGS,
     resolveVideoGuidesBySlugs,
+    syncVideoElementCaptionLocale,
     VIDEO_GUIDE_UI_STRINGS,
     VIDEO_GUIDES_CATALOG,
     VideoGuideEntry,
     VideoGuideTrackId,
 } from '@/lib/data/oscar/VideoGuidesCatalog';
+import TrainingSandboxLauncherCard from '@/app/_components/sandbox/TrainingSandboxLauncherCard';
+
+const SYSTEM_UPDATE_SHORTCUT_COPY: Record<Locale, { title: string; desc: string; button: string }> = {
+    en: {
+        title: 'Zero-Login GitHub & Offline System Update (Administrators)',
+        desc: 'Check ORNL/oscar GitHub Releases anonymously without any GitHub account or token, verify SHA-256 checksums, and upgrade OSCAR in place (with automatic rollback) — or upload an offline release .zip.',
+        button: 'Open System Update',
+    },
+    es: {
+        title: 'Actualización del sistema desde GitHub sin cuenta (Administradores)',
+        desc: 'Consulte ORNL/oscar en GitHub Releases sin iniciar sesión ni usar tokens, verifique SHA-256 y actualice OSCAR en el lugar — o cargue un archivo .zip sin conexión.',
+        button: 'Abrir actualización del sistema',
+    },
+    fr: {
+        title: 'Mise à jour système GitHub sans compte (Administrateurs)',
+        desc: 'Vérifiez anonymement les versions GitHub ORNL/oscar sans compte ni jeton, contrôlez le SHA-256 et mettez à jour OSCAR sur place — ou importez un fichier .zip hors ligne.',
+        button: 'Ouvrir la mise à jour système',
+    },
+    el: {
+        title: 'Ενημέρωση συστήματος GitHub χωρίς σύνδεση λογαριασμού (Διαχειριστές)',
+        desc: 'Ελέγξτε ανώνυμα τις εκδόσεις ORNL/oscar στο GitHub χωρίς λογαριασμό ή διακριτικό, επαληθεύστε το SHA-256 και αναβαθμίστε το OSCAR επιτόπου — ή μεταφορτώστε αρχείο .zip εκτός σύνδεσης.',
+        button: 'Άνοιγμα ενημέρωσης συστήματος',
+    },
+};
+
+const TOP_BAR_TOOLS_CARD_TITLE: Record<Locale, string> = {
+    en: 'Top-Bar Console Controls & Visual Symbols',
+    es: 'Controles y símbolos visuales de la barra superior',
+    fr: 'Commandes et symboles visuels de la barre supérieure',
+    el: 'Στοιχεία ελέγχου & οπτικά σύμβολα επάνω γραμμής',
+};
 
 interface HelpSectionItem {
     title: string;
@@ -94,7 +139,7 @@ interface LocalizedHelpContent {
 
 const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
     en: {
-        dialogTitle: 'OSCAR 3.11.0 Operator Quick Guide & Glossary',
+        dialogTitle: 'OSCAR 3.11.10 Operator Quick Guide & Glossary',
         dialogSubtitle: 'Plain-language reference for console workflows, multi-format reports, and radiation portal terminology.',
         tabs: {
             pages: 'Console Pages',
@@ -110,7 +155,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 title: 'Events (`/event-log`)',
-                summary: 'Searchable historical log of all occupancies, alarms, and faults. Search by normalized Vehicle / ISO 6346 Container ID across local and federated nodes to open the Multi-Pass Vehicle Comparison & Linked Adjudication dialog, filter by Event UUID, lane, time window, Adjudication Code (`Code 9998: Extended Occupancy Gamma Alarm`, `Code 9999: EML Non-Threat`, built-in `1–11`, and custom codes), or nested AND/OR rules, or select multiple alarms for bulk adjudication.',
+                summary: 'Searchable historical log of all occupancies, alarms, and faults. Search by normalized Vehicle / ISO 6346 Container ID (or paste a WCO UFF scan UUID / `.uff` filename / share path when Cargo NII is enabled) across local and federated nodes to open Multi-Pass Vehicle Comparison or 16-bit Cargo X-Ray inspection, filter by Event UUID, lane, time window, Adjudication Code (`Code 9998: Extended Occupancy Gamma Alarm`, `Code 9999: EML Non-Threat`, built-in `1–11`, and custom codes), or nested AND/OR rules, or select multiple alarms for bulk adjudication.',
             },
             {
                 title: 'Status of Health (`/health`)',
@@ -118,7 +163,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 title: 'Map (`/map`)',
-                summary: 'Full-screen georeferenced site diagram or tile map with live color-coded lane markers.',
+                summary: 'Full-screen georeferenced site diagram or tile map (including air-gapped regional `.pmtiles` vector/raster basemaps under `Offline: <Layer Name>`) with live color-coded lane markers.',
             },
             {
                 title: 'National (`/national-view`)',
@@ -133,8 +178,20 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
                 summary: 'Air-gapped QR code and `.oscar-alarm.json` export/import for sharing verified compact alarm summaries and count curves offline.',
             },
             {
-                title: 'Nodes (`/servers`)',
-                summary: 'Configure federated remote OSCAR nodes using secure session cookies or memory-only Basic credentials.',
+                title: 'Users & Access (`/users`)',
+                summary: 'Self-service account management for registering offline FIDO2 / WebAuthn Passkeys (Face ID, Touch ID, Windows Hello, YubiKey) and changing local passwords (independent from Octelium Zero-Trust tunnel credentials), plus non-IT Administrator controls for Users & Roles (`Administrator`, `Operator`, `Viewer`), Bulk CSV/Paste User Enrollment with ready-to-send startup messages and 1-tap Passkey/Password setup QR codes (`/login/enroll?token=oscar_inv_...`), Operational View user scoping, phone-free temporary passwords, Federation Service Tokens (`oscar_fed_...`) with 1-click launch into `/servers?auth=bearer`, Corporate or Self-Hosted (`ORNL/oscar-federation-hub`) OIDC / Trusted Tunnel SSO policy (`X-Octelium-Groups`, optional private-CA PEM trust, and 1-click Open Federated User Console), and the Backup & Hardware Replacement checklist.',
+            },
+            {
+                title: 'Servers (`/servers`)',
+                summary: 'Connect federated remote OSCAR sites for National View (`/national-view`) and Multi-Pass Vehicle Search (`/event-log`): click "Use Federation Token (oscar_fed_...)" (or set Authentication Method to Federation Service Token), check HTTPS (port 443), and paste the `oscar_fed_...` token minted on the remote site under Users & Access -> Federation Tokens.',
+            },
+            {
+                title: 'USB Backups (`/usb-backups`)',
+                summary: 'Administrator manager for zero-downtime (`0.0 s` portal outage) incremental backups to an external USB 3.x NVMe SSD (`NTFS` default), supporting Continual Background Sync (with automatic USB reconnect catch-up), Occasional / On-Demand Visit Sync, 1-click Safely Eject USB Drive (`SAFE_TO_UNPLUG`), SHA-256 verification, and off-site `oscar-backup-key.txt` escrow download.',
+            },
+            {
+                title: 'Runtime Extensions (`/extensions`)',
+                summary: 'Upgrade-safe administrator hub for hot-swapping regional OCR model & Unicode plate-rule packs, air-gapped `.pmtiles` v3 regional basemaps, secondary-inspection spectroscopy isotope libraries, trusted enterprise X.509 CA certificates, disposition policy packs, EML plugins, and optional read-only SMBv2/SMBv3 Cargo NII (WCO UFF 2.0 / 3.0) shares while preserving OSCAR’s shipped built-in defaults.',
             },
         ],
         reportsIntro: 'Every report request generates a fresh file and overwrites any earlier file with the same parameters:',
@@ -153,7 +210,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 title: 'Adjudication Report (`ADJUDICATION`)',
-                summary: 'Starts with the summed All Selected Lanes (`ALL_LANES`) Disposition and Isotope Results tables across all selected lanes, followed by individual Disposition and Isotope Results tables for each lane.',
+                summary: 'Starts with the All Selected Lanes (`ALL_LANES`) UpSet Alarm & Source-Category Co-Occurrence chart (populated categories listed first and rare SNM intersections rolled into a crimson `Other SNM` bar summing to the exact SNM total) plus summed Disposition and Isotope Results tables, followed by per-lane breakdowns.',
             },
             {
                 title: 'Adjudication Details Extract (`ADJUDICATION_DETAILS`)',
@@ -225,7 +282,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 term: 'Operational View (`?view=<key>`)',
-                meaning: 'Named workstation filter (such as `north-gate`) that scopes Dashboard, Events, Status of Health, and Reports to assigned lanes.',
+                meaning: 'Named workstation filter (such as `north-gate`) selectable from the top-bar Scoped View dropdown (or via `?view=<key>` URLs) that scopes Dashboard, Events, Status of Health, Map, and Reports to assigned lanes while respecting account `allowedViews` permissions.',
             },
             {
                 term: 'Retained 5-Frame Media',
@@ -239,12 +296,44 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
                 term: 'Container & License Plate OCR (`ocrConfig`)',
                 meaning: 'Optional per-lane asynchronous background OCR (disabled by default). When enabled on a lane, OSCAR samples occupancy frames as CPU/heap resources allow, tiers `vehicleOcr` candidates to `PARQUET_PRIMARY`, retains date-partitioned JPEG evidence crops alongside retained `frame-03.jpg` media (`ocrCropRetentionDays = 365`, preserving held and operator-adjudicated events and deleting transient non-alarm clips immediately when `Alarms Only` is off), auto-fills ISO 6346 check-digit-verified container codes (or high-confidence plates) into untouched Vehicle ID fields, and displays click-to-apply suggestion chips with crop thumbnails.',
             },
+            {
+                term: 'Passkeys (WebAuthn / FIDO2) & Persistent Sessions',
+                meaning: 'Phishing-resistant public-key sign-in using Face ID, Touch ID, Windows Hello, or hardware security keys (such as YubiKey) verified locally by OSCAR with zero internet dependency. Sessions persist across browser restarts, server reboots, and `oscar upgrade` until explicit Log Out or administrator revocation; facilities prohibiting personal electronics can use individual PBKDF2 local passwords.',
+            },
+            {
+                term: 'Federation Service Tokens (`oscar_fed_...`)',
+                meaning: 'Scoped Bearer / MQTT credentials for multi-site National View (`/national-view`) and Multi-Pass Vehicle Search (`/event-log`) without sharing human passwords: 1) create the token on the remote target site in Users & Access (`/users`) -> Federation Tokens (`Viewer` read-only or `Operator` role); 2) paste it on the monitoring site in Servers (`/servers`) -> Add Server -> Authentication Method: Federation Service Token.',
+            },
+            {
+                term: 'Pluggable Runtime Extensions & Regional Packs (`/extensions`)',
+                meaning: 'Upgrade-safe administrator hub for hot-swapping regional OCR model/plate-rule packs (`OcrEngine` SPI or ONNX `.zip`), offline regional `.pmtiles` vector/raster basemaps (`/var/lib/oscar/extensions/maps-storage/`), secondary-inspection spectroscopy isotope libraries, trusted enterprise X.509 CA certificates, disposition policy packs, and EML plugins without overwriting OSCAR’s shipped built-in defaults.',
+            },
+            {
+                term: 'Continual & Occasional USB NVMe Backups (`/usb-backups`)',
+                meaning: 'Zero-downtime (`0.0 s` portal outage) content-addressed incremental backup to an external USB 3.x NVMe SSD (`NTFS` default, readable on Windows, macOS, and Linux laptops). Supports Continual Background Sync (with automatic catch-up on USB reconnect), Occasional Visit Sync, 1-click Safely Eject (`SAFE_TO_UNPLUG`), laptop delta copy (`COPY-TO-ANOTHER-DRIVE.bat` / `./copy-to-another-drive.sh`), and cold-iron recovery (`oscar usb-backup restore`).',
+            },
+            {
+                term: 'WCO UFF 2.0 / 3.0 & HEMD Cargo Radiographs (`/extensions` -> Cargo NII)',
+                meaning: 'World Customs Organization Unified File Format (`.uff`) packages produced by non-intrusive cargo X-ray scanners (disabled by default for zero screen clutter). Operators can always inspect local `.uff` files via Upload Files in Secondary Inspection, or an administrator can connect a read-only SMBv2/SMBv3 share in `/extensions` for scanner/time-window browsing, UFF UUID lookup, 1-character fuzzy container OCR correlation, 16-bit `uint16` TIFF window/level & HEMD atomic-number (`Z_eff`) inspection aligned with the RPM gamma/neutron count strip, and zero-download adjudication linking.',
+            },
+            {
+                term: 'Hands-On Training Sandbox & Guided Academy (`oscar-sandbox`)',
+                meaning: 'Isolated ephemeral `:8444` training environment (`sudo bash oscar.sh sandbox start` / `.\\oscar.bat sandbox start`) reusing the installed OSCAR image with `archive.enabled = false`, zero writes to production PostgreSQL/Parquet/`config.json`, a built-in loopback Rapiscan + RTSP + OCR + Cargo UFF + `WebRelay-Quad` (`127.0.0.1:10180`) micro-emulator, a multi-modal Training Coach (4-language videos, screenshots, destination-aware 1-click fault/alarm injection that opens `/event-log` for `Code 9999` / `Code 9998` / `Clean Pass` and `/health` for faults, Split-Pane SensorHub Admin, outcome auto-verification, and 1-page PDF Completion Record), and complete `< 2 s` flush on exit.',
+            },
+            {
+                term: 'RPM Lights & Sound (`webRelayConfig` — WebRelay-Quad)',
+                meaning: 'Optional per-lane network relay control (`enabled = false` by default) for ControlByWeb WebRelay-Quad (`X-WR-4R3-E` / `X-410`) HTTP/XML modules (`stateFull.xml` / `state.xml`) across a Primary Pillar unit and optional Ancillary Dry-Contact unit. Supports Automatic (`AUTO`) occupancy/EML gatekeeping (arming `R1=1, R2=1`, suppressing `Code 9999: EML Non-Threat` and optionally `Code 9998: Extended Occupancy Gamma Alarm`, pulsing `R3` Gamma Red Light + Siren and/or `R4` Neutron Blue Light on actionable alarms, and failing safe to `0,0,0,0` pass-through when stopped), `PASS_THROUGH`, `MUTED`, and live Administrator manual controls in `/health`, `/lane-view`, and `/sensorhub/admin`.',
+            },
+            {
+                term: 'Side-by-Side CAS RPM Edge Proxy (`oscar-rpm-proxy`)',
+                meaning: 'Optional isolated Docker stack (`sudo bash oscar.sh rpm-proxy` / `.\\oscar.bat rpm-proxy`) for portals operating OSCAR alongside an existing Central Alarm Station (CAS). Fans out `1–50` single-client Rapiscan RPM TCP streams simultaneously at `< 1 ms` latency using Port-Mapped (`11601..11650`) or Ubuntu 24.04 Transparent Virtual-IP `:1600` mode, replays cached `SG1..SG3` / `SN1..SN2` setup frames, keeps CAS connected across OSCAR restarts/upgrades, and propagates physical RPM disconnects to both systems in `<= 4.0 s`.',
+            },
         ],
         linksIntro: 'Open the full administrator manual in SensorHub Admin or watch the bite-sized how-to video guides:',
         adminLinkLabel: 'Open SensorHub Admin & In-UI Operator Manual (`/sensorhub/admin`)',
         adminLinkDesc: 'Requires administrator sign-in. Select OSCAR Service or any sensor module and open its README tab for the localized manual.',
         videoGuidesLinkLabel: 'Open OSCAR How-To Video Guides (`ORNL/oscar-video-guides`)',
-        videoGuidesLinkDesc: '18 bite-sized (< 2 min) narrated/captioned screen recordings covering certificate trust, lane setup, adjudication, EML, Vehicle OCR, health monitoring, support bundles, and multi-format reports.',
+        videoGuidesLinkDesc: '29 bite-sized (< 2 min) narrated/captioned screen recordings covering Ubuntu & Windows field setup, Hands-On Training Sandbox, per-lane WebRelay RPM Lights & Sound control, USB NVMe backups, pluggable extensions, offline .pmtiles maps, WCO Cargo UFF 16-bit X-ray inspection, lane setup, adjudication, EML, Vehicle OCR, Users & Passkeys, federation, support bundles, and multi-format reports.',
         supportBundleTitle: 'Troubleshooting & Support Bundle (`.zip`)',
         supportBundleDesc: 'Downloads a single diagnostic `.zip` combining recent browser console/network diagnostics with OSCAR server logs, module states, and JVM/storage health. If the server cannot be reached or fails to start, run `./oscar.sh support-bundle` (Linux) or `oscar.bat support-bundle` (Windows) on the host.',
         supportBundlePrivacyNote: 'Privacy & security: collected only to diagnose technical issues; passwords, tokens, session cookies, RTSP credentials, and private keys are automatically scrubbed.',
@@ -255,7 +344,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
         closeLabel: 'Close',
     },
     es: {
-        dialogTitle: 'Guía rápida y glosario del operador de OSCAR 3.11.0',
+        dialogTitle: 'Guía rápida y glosario del operador de OSCAR 3.11.10',
         dialogSubtitle: 'Referencia en lenguaje claro para flujos de consola, informes multiformato y terminología de pórticos de radiación.',
         tabs: {
             pages: 'Páginas de consola',
@@ -271,7 +360,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 title: 'Eventos (`/event-log`)',
-                summary: 'Registro histórico de ocupaciones, alarmas y fallos con búsqueda normalizada por ID de vehículo / contenedor ISO 6346 (comparación multipasada y adjudicación vinculada en nodos locales y federados), búsqueda por UUID, filtros por Código de adjudicación (`Código 9998`, `Código 9999`, `1–11` y personalizados) y adjudicación masiva.',
+                summary: 'Registro histórico de ocupaciones, alarmas y fallos con búsqueda normalizada por ID de vehículo / contenedor ISO 6346 (o pegado de UUID / archivo `.uff` cuando Carga NII está activa), comparación multipasada, filtros por Código de adjudicación (`Código 9998`, `Código 9999`, `1–11` y personalizados) y adjudicación masiva.',
             },
             {
                 title: 'Estado de salud (`/health`)',
@@ -294,8 +383,20 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
                 summary: 'Exportación e importación de códigos QR y archivos `.oscar-alarm.json` para entornos aislados sin conexión.',
             },
             {
-                title: 'Nodos (`/servers`)',
-                summary: 'Configuración de nodos OSCAR remotos federados mediante sesión segura o credenciales Basic en memoria.',
+                title: 'Usuarios y acceso (`/users`)',
+                summary: 'Gestión de cuenta personal para registrar llaves de acceso FIDO2 / WebAuthn sin internet (Face ID, Touch ID, Windows Hello, YubiKey) y cambiar contraseñas locales (independientes del túnel Octelium Zero-Trust), además de controles administrativos para Usuarios y roles (`Administrador`, `Operador`, `Visor`), inscripción masiva CSV/pegado con códigos QR (`/login/enroll?token=oscar_inv_...`), alcance por Vista operativa, tokens de federación (`oscar_fed_...`) con acceso en 1 clic a `/servers?auth=bearer`, directiva SSO OIDC / túnel (`ORNL/oscar-federation-hub`, `X-Octelium-Groups`, CA PEM privada y acceso directo a la consola externa) y guía de copia de seguridad.',
+            },
+            {
+                title: 'Servidores (`/servers`)',
+                summary: 'Conexión de sitios OSCAR remotos federados para Vista Nacional (`/national-view`) y Búsqueda multipasada (`/event-log`): pulse "Usar token de federación (oscar_fed_...)" (o elija Token de servicio de federación), active HTTPS (puerto 443) y pegue el token creado en el sitio remoto en Usuarios y acceso -> Tokens de federación.',
+            },
+            {
+                title: 'Copias USB (`/usb-backups`)',
+                summary: 'Gestión administrativa de copias incrementales sin interrupción (`0.0 s`) en unidades externas SSD NVMe USB 3.x (`NTFS` predeterminado), con Sincronización Continua Automática, Sincronización Ocasional, Expulsión Segura con 1 clic (`SEGURO PARA DESCONECTAR`), verificación SHA-256 y descarga de `oscar-backup-key.txt`.',
+            },
+            {
+                title: 'Extensiones de ejecución (`/extensions`)',
+                summary: 'Centro administrativo persistente ante actualizaciones para cambiar en caliente modelos y reglas regionales OCR, mapas regionales sin conexión `.pmtiles` v3, bibliotecas de espectroscopia secundaria, certificados CA X.509, paquetes de códigos de adjudicación, complementos EML y recursos SMBv2/SMBv3 opcionales de solo lectura para Carga NII (WCO UFF 2.0 / 3.0) conservando los valores predeterminados integrados.',
             },
         ],
         reportsIntro: 'Cada solicitud genera un archivo nuevo y sobrescribe cualquier archivo previo con los mismos parámetros:',
@@ -386,7 +487,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 term: 'Vista operativa (`?view=<clave>`)',
-                meaning: 'Filtro con nombre que limita la consola a los carriles asignados a esa estación de trabajo.',
+                meaning: 'Filtro con nombre seleccionable desde el menú desplegable Vista operativa de la barra superior (o mediante URLs `?view=<clave>`) que limita la consola a los carriles asignados respetando los permisos `allowedViews` del usuario.',
             },
             {
                 term: 'Medios retenidos de 5 fotogramas',
@@ -400,12 +501,44 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
                 term: 'OCR de contenedores y matrículas (`ocrConfig`)',
                 meaning: 'OCR asíncrono en segundo plano opcional por carril (desactivado de forma predeterminada). Cuando se activa, muestrea fotogramas según CPU y memoria, archiva `vehicleOcr` en `PARQUET_PRIMARY`, conserva recortes JPEG particionados por fecha junto con `frame-03.jpg` (`ocrCropRetentionDays = 365`, preservando eventos retenidos o adjudicados por el operador y eliminando al instante clips sin alarma cuando `Solo alarmas` está desactivado), completa automáticamente contenedores ISO 6346 válidos o matrículas de alta confianza en Vehículo si no se ha editado y ofrece sugerencias clicables.',
             },
+            {
+                term: 'Llaves de acceso (WebAuthn / FIDO2) y sesiones persistentes',
+                meaning: 'Inicio de sesión con clave pública resistente al phishing mediante Face ID, Touch ID, Windows Hello o llaves físicas de seguridad (como YubiKey), verificado localmente por OSCAR sin depender de internet. Las sesiones persisten tras reinicios del navegador, del servidor y `oscar upgrade` hasta cerrar sesión o revocación administrativa; los recintos sin teléfonos pueden usar contraseñas locales PBKDF2 individuales.',
+            },
+            {
+                term: 'Tokens de servicio de federación (`oscar_fed_...`)',
+                meaning: 'Credenciales Bearer / MQTT con alcance limitado emitidas en Usuarios y acceso (`/users`) para federación multisitio de Vista Nacional y búsqueda multipasada de vehículos sin compartir contraseñas de administrador (rol `Visor` de solo lectura o `Operador`).',
+            },
+            {
+                term: 'Extensiones de ejecución y paquetes regionales (`/extensions`)',
+                meaning: 'Panel administrativo persistente ante actualizaciones para intercambiar en caliente modelos y reglas regionales OCR, mapas base regionales sin conexión `.pmtiles` (`/var/lib/oscar/extensions/maps-storage/`), bibliotecas de isótopos de espectroscopia secundaria, certificados CA X.509 empresariales, paquetes de códigos de adjudicación y complementos EML conservando los valores predeterminados integrados.',
+            },
+            {
+                term: 'Copias de seguridad USB NVMe continuas y ocasionales (`/usb-backups`)',
+                meaning: 'Copia incremental sin tiempo de inactividad (`0.0 s`) en un SSD externo USB 3.x NVMe (`NTFS` predeterminado, compatible con Windows, macOS y Linux), con sincronización continua o bajo demanda, expulsión segura en 1 clic (`SAFE_TO_UNPLUG`), copia diferencial en portátil y restauración completa (`oscar usb-backup restore`).',
+            },
+            {
+                term: 'WCO UFF 2.0 / 3.0 y radiografías de carga HEMD (`/extensions` -> Carga NII)',
+                meaning: 'Paquetes Unified File Format (`.uff`) de la Organización Mundial de Aduanas generados por escáneres de rayos X de carga no intrusivos (desactivado de forma predeterminada para no añadir controles innecesarios). Permite inspeccionar archivos `.uff` locales desde Subir archivos o conectar un recurso SMBv2/SMBv3 de solo lectura en `/extensions` para exploración por escáner/ventana temporal, búsqueda por UUID, correlación OCR difusa de 1 carácter, radiografía TIFF de 16 bits con bandas atómicas HEMD (`Z_eff`) alineada al perfil RPM y vinculación sin descarga completa.',
+            },
+            {
+                term: 'Entorno práctico de formación y academia guiada (`oscar-sandbox`)',
+                meaning: 'Entorno efímero aislado en `:8444` (`sudo bash oscar.sh sandbox start` / `.\\oscar.bat sandbox start`) con `archive.enabled = false`, cero impacto en PostgreSQL/Parquet/`config.json` reales, microemulador local Rapiscan + RTSP + OCR + UFF + `WebRelay-Quad` (`127.0.0.1:10180`), Guía de Práctica multimodal (vídeos en 4 idiomas, inyección guiada que abre `/event-log` para `Code 9999` / `Code 9998` / `Clean Pass` y `/health` para fallos), SensorHub Admin en pantalla dividida, verificación automática, certificado PDF de 1 página y purga completa en `< 2 s` al salir.',
+            },
+            {
+                term: 'Luces y sonido del RPM (`webRelayConfig` — WebRelay-Quad)',
+                meaning: 'Control opcional de relés en red por carril (`enabled = false` por defecto) para módulos ControlByWeb WebRelay-Quad (`X-WR-4R3-E` / `X-410`) mediante HTTP/XML (`stateFull.xml` / `state.xml`) en unidad primaria y unidad auxiliar opcional de contactos secos. Admite modo Automático (`AUTO`) (arma `R1=1, R2=1`, suprime `Code 9999` y opcionalmente `Code 9998`, pulsa `R3` luz roja gamma + sirena y/o `R4` luz azul de neutrones en alarmas reales y vuelve a `0,0,0,0` al detenerse), `PASS_THROUGH`, `MUTED` y controles manuales para administradores en `/health`, `/lane-view` y `/sensorhub/admin`.',
+            },
+            {
+                term: 'Proxy de borde RPM para operación paralela con CAS (`oscar-rpm-proxy`)',
+                meaning: 'Pila Docker aislada opcional (`sudo bash oscar.sh rpm-proxy` / `.\\oscar.bat rpm-proxy`) para operar OSCAR en paralelo con una estación central de alarmas (CAS) existente. Distribuye `1–50` flujos TCP Rapiscan RPM en tiempo real (`< 1 ms`) mediante puertos mapeados (`11601..11650`) o IP virtual transparente `:1600` en Ubuntu 24.04, reproduce tramas `SG1..SG3` / `SN1..SN2`, mantiene la CAS conectada durante reinicios/actualizaciones de OSCAR y propaga desconexiones reales del RPM en `<= 4,0 s`.',
+            },
         ],
         linksIntro: 'Abra el manual completo de administración o consulte las videoguías prácticas:',
         adminLinkLabel: 'Abrir administración de SensorHub y manual integrado (`/sensorhub/admin`)',
         adminLinkDesc: 'Requiere cuenta de administrador. Seleccione el Servicio OSCAR o cualquier módulo y abra la pestaña README.',
         videoGuidesLinkLabel: 'Abrir videoguías prácticas de OSCAR (`ORNL/oscar-video-guides`)',
-        videoGuidesLinkDesc: '18 vídeos cortos (< 2 min) con subtítulos sobre certificados, carriles, adjudicación, EML, OCR de vehículos, estado de salud, paquetes de soporte e informes.',
+        videoGuidesLinkDesc: '29 vídeos cortos (< 2 min) con subtítulos sobre preparación de campo Ubuntu/Windows, entorno práctico de formación, luces y sonido RPM por carril (WebRelay-Quad), copias USB NVMe, extensiones, mapas .pmtiles sin conexión, radiografías WCO Cargo UFF de 16 bits, carriles, adjudicación, EML, OCR de vehículos, usuarios y Passkeys, federación, soporte e informes.',
         supportBundleTitle: 'Diagnóstico y paquete de soporte (`.zip`)',
         supportBundleDesc: 'Descarga un archivo `.zip` de diagnóstico que combina eventos recientes del navegador con registros del servidor OSCAR, estado de módulos y salud de JVM/almacenamiento. Si el servidor no responde o no arranca, ejecute `./oscar.sh support-bundle` (Linux) u `oscar.bat support-bundle` (Windows) en el servidor.',
         supportBundlePrivacyNote: 'Privacidad y seguridad: se recopila únicamente para diagnosticar incidencias técnicas; contraseñas, tokens, cookies de sesión, credenciales RTSP y claves privadas se redactan automáticamente.',
@@ -416,7 +549,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
         closeLabel: 'Cerrar',
     },
     fr: {
-        dialogTitle: 'Guide rapide opérateur et glossaire OSCAR 3.11.0',
+        dialogTitle: 'Guide rapide opérateur et glossaire OSCAR 3.11.10',
         dialogSubtitle: 'Référence en langage clair pour les flux de console, les rapports multiformats et la terminologie des portiques.',
         tabs: {
             pages: 'Pages de la console',
@@ -432,7 +565,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 title: 'Événements (`/event-log`)',
-                summary: 'Journal historique consultable des occupations, alarmes et défauts avec recherche normalisée par ID de véhicule / conteneur ISO 6346 (comparaison multipassage et adjudication liée sur nœuds locaux et fédérés), recherche par UUID, filtres par Code d’adjudication (`Code 9998`, `Code 9999`, `1–11` et personnalisés) et adjudication groupée.',
+                summary: 'Journal historique consultable des occupations, alarmes et défauts avec recherche normalisée par ID de véhicule / conteneur ISO 6346 (ou collage d’UUID / fichier `.uff` lorsque Fret NII est activé), comparaison multipassage, filtres par Code d’adjudication (`Code 9998`, `Code 9999`, `1–11` et personnalisés) et adjudication groupée.',
             },
             {
                 title: 'État de santé (`/health`)',
@@ -455,8 +588,20 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
                 summary: 'Exportation et importation hors ligne par code QR et fichier `.oscar-alarm.json`.',
             },
             {
-                title: 'Nœuds (`/servers`)',
-                summary: 'Configuration des nœuds OSCAR distants fédérés par session sécurisée ou identifiants Basic en mémoire.',
+                title: 'Utilisateurs et accès (`/users`)',
+                summary: 'Gestion du compte personnel pour enregistrer des clés d’accès FIDO2 / WebAuthn hors ligne (Face ID, Touch ID, Windows Hello, YubiKey) et modifier le mot de passe local (indépendant du tunnel Octelium Zero-Trust), ainsi que les contrôles administrateur pour Utilisateurs et rôles (`Administrateur`, `Opérateur`, `Lecteur`), l’inscription groupée CSV avec codes QR (`/login/enroll?token=oscar_inv_...`), le périmètre par Vue opérationnelle, les jetons de fédération (`oscar_fed_...`) avec lien direct vers `/servers?auth=bearer`, la politique SSO OIDC / tunnel (`ORNL/oscar-federation-hub`, `X-Octelium-Groups`, CA PEM privée et raccourci vers la console externe) et le guide de sauvegarde.',
+            },
+            {
+                title: 'Serveurs (`/servers`)',
+                summary: 'Connexion des sites OSCAR distants fédérés pour la Vue Nationale (`/national-view`) et la Recherche multipassage (`/event-log`) : cliquez sur « Utiliser un jeton de fédération (oscar_fed_...) », cochez HTTPS (port 443) et collez le jeton créé sur le site distant dans Utilisateurs et accès -> Jetons de fédération.',
+            },
+            {
+                title: 'Sauvegardes USB (`/usb-backups`)',
+                summary: 'Gestion administrateur des sauvegardes incrémentielles sans interruption (`0,0 s`) sur SSD externe USB 3.x NVMe (`NTFS` par défaut), avec synchronisation continue ou occasionnelle, éjection sécurisée en 1 clic (`PRÊT À DÉBRANCHER`), vérification SHA-256 et téléchargement de `oscar-backup-key.txt`.',
+            },
+            {
+                title: 'Extensions d’exécution (`/extensions`)',
+                summary: 'Espace administrateur persistant lors des mises à niveau pour remplacer à chaud les modèles et règles OCR régionaux, les fonds de carte `.pmtiles` v3 hors ligne, les bibliothèques spectroscopiques, les certificats CA X.509, les packs de codes d’adjudication, les modules EML et les partages SMBv2/SMBv3 optionnels en lecture seule pour le Fret NII (OMD UFF 2.0 / 3.0) tout en conservant les solutions par défaut intégrées.',
             },
         ],
         reportsIntro: 'Chaque demande génère un nouveau fichier et remplace tout rapport antérieur portant les mêmes paramètres :',
@@ -547,7 +692,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 term: 'Vue opérationnelle (`?view=<clé>`)',
-                meaning: 'Filtre nommé limitant la console aux voies affectées à ce poste de travail.',
+                meaning: 'Filtre nommé sélectionnable depuis le menu déroulant Vue opérationnelle de la barre supérieure (ou via `?view=<clé>`) limitant la console aux voies affectées dans le respect des permissions `allowedViews` du compte.',
             },
             {
                 term: 'Médias conservés à 5 images',
@@ -561,12 +706,44 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
                 term: 'OCR conteneurs et plaques (`ocrConfig`)',
                 meaning: 'OCR asynchrone en arrière-plan optionnel par voie (désactivé par défaut). Lorsqu’il est activé, OSCAR analyse les images selon la disponibilité CPU/mémoire, archive `vehicleOcr` dans `PARQUET_PRIMARY`, conserve les vignettes JPEG partitionnées par date avec `frame-03.jpg` (`ocrCropRetentionDays = 365`, en préservant les événements sous rétention ou adjugés par un opérateur et en supprimant immédiatement les clips hors alarme lorsque `Alarmes uniquement` est désactivé), préremplit les conteneurs ISO 6346 valides ou plaques à haute confiance et affiche des suggestions cliquables.',
             },
+            {
+                term: 'Clés d’accès (WebAuthn / FIDO2) et sessions persistantes',
+                meaning: 'Connexion par clé publique résistante à l’hameçonnage via Face ID, Touch ID, Windows Hello ou clés physiques de sécurité (comme YubiKey), vérifiée localement par OSCAR sans internet. Les sessions persistent après redémarrage du navigateur, du serveur et `oscar upgrade` jusqu’à déconnexion explicite ou révocation ; les sites sans téléphones peuvent utiliser des mots de passe locaux PBKDF2 individuels.',
+            },
+            {
+                term: 'Jetons de service de fédération (`oscar_fed_...`)',
+                meaning: 'Identifiants Bearer / MQTT à périmètre restreint créés dans Utilisateurs et accès (`/users`) pour la fédération multi-sites de la Vue Nationale et de la recherche multipassage de véhicules sans partager de mots de passe administrateur (rôle `Lecteur` ou `Opérateur`).',
+            },
+            {
+                term: 'Extensions d’exécution et packs régionaux (`/extensions`)',
+                meaning: 'Espace administrateur persistant lors des mises à niveau permettant de remplacer à chaud les modèles et règles OCR régionaux, les fonds de carte `.pmtiles` hors ligne (`/var/lib/oscar/extensions/maps-storage/`), les bibliothèques spectroscopiques, les certificats CA X.509 d’entreprise, les packs de codes d’adjudication et les modules EML tout en préservant les solutions par défaut intégrées.',
+            },
+            {
+                term: 'Sauvegardes USB NVMe continues et occasionnelles (`/usb-backups`)',
+                meaning: 'Sauvegarde incrémentielle sans coupure (`0,0 s`) sur SSD externe USB 3.x NVMe (`NTFS` par défaut, lisible sous Windows, macOS et Linux), avec synchronisation continue ou à la demande, éjection sécurisée en 1 clic (`SAFE_TO_UNPLUG`), copie delta sur portable et restauration complète (`oscar usb-backup restore`).',
+            },
+            {
+                term: 'OMD UFF 2.0 / 3.0 et radiographies fret HEMD (`/extensions` -> Fret NII)',
+                meaning: 'Archives Unified File Format (`.uff`) de l’Organisation mondiale des douanes produites par les scanners à rayons X de fret (désactivé par défaut pour ne pas surcharger l’écran). Permet d’inspecter un fichier `.uff` local via Téléverser des fichiers ou de connecter un partage SMBv2/SMBv3 en lecture seule dans `/extensions` pour parcourir par scanner/plage horaire, rechercher par UUID, corréler par OCR tolérant à 1 caractère, inspecter les radiographies TIFF 16 bits et bandes atomiques HEMD (`Z_eff`) alignées au profil RPM et lier sans téléchargement complet.',
+            },
+            {
+                term: 'Bac à sable de formation pratique et académie guidée (`oscar-sandbox`)',
+                meaning: 'Environnement éphémère isolé sur `:8444` (`sudo bash oscar.sh sandbox start` / `.\\oscar.bat sandbox start`) avec `archive.enabled = false`, zéro écriture dans PostgreSQL/Parquet/`config.json` réels, micro-émulateur local Rapiscan + RTSP + OCR + UFF + `WebRelay-Quad` (`127.0.0.1:10180`), Coach Formation multimodal (vidéos en 4 langues, injection guidée ouvrant `/event-log` pour `Code 9999` / `Code 9998` / `Clean Pass` et `/health` pour les défauts), SensorHub Admin en vue partagée, auto-vérification, certificat PDF d’une page et purge complète en `< 2 s` à la fermeture.',
+            },
+            {
+                term: 'Feux et sirène du RPM (`webRelayConfig` — WebRelay-Quad)',
+                meaning: 'Commande réseau facultative par voie (`enabled = false` par défaut) pour modules ControlByWeb WebRelay-Quad (`X-WR-4R3-E` / `X-410`) via HTTP/XML (`stateFull.xml` / `state.xml`) sur unité primaire et unité auxiliaire facultative à contacts secs. Prend en charge le mode Automatique (`AUTO`) (armement `R1=1, R2=1`, masquage `Code 9999` et en option `Code 9998`, impulsion `R3` feu rouge gamma + sirène et/ou `R4` feu bleu neutron sur alarme réelle, retour de sécurité `0,0,0,0` à l’arrêt), `PASS_THROUGH`, `MUTED` et les commandes manuelles administrateur dans `/health`, `/lane-view` et `/sensorhub/admin`.',
+            },
+            {
+                term: 'Proxy de périphérie RPM en parallèle avec une CAS (`oscar-rpm-proxy`)',
+                meaning: 'Pile Docker isolée facultative (`sudo bash oscar.sh rpm-proxy` / `.\\oscar.bat rpm-proxy`) pour exploiter OSCAR en parallèle d’une station centrale d’alarmes (CAS) existante. Diffuse `1–50` flux TCP Rapiscan RPM en temps réel (`< 1 ms`) en mode ports mappés (`11601..11650`) ou IP virtuelle transparente `:1600` sous Ubuntu 24.04, rejoue les trames `SG1..SG3` / `SN1..SN2`, maintient la CAS connectée lors des redémarrages/mises à niveau d’OSCAR et propage les déconnexions physiques du RPM en `<= 4,0 s`.',
+            },
         ],
         linksIntro: 'Ouvrez le manuel complet d’administration ou consultez les guides vidéo pratiques :',
         adminLinkLabel: 'Ouvrir l’administration SensorHub et le manuel intégré (`/sensorhub/admin`)',
         adminLinkDesc: 'Connexion administrateur requise. Sélectionnez le Service OSCAR ou un module et ouvrez l’onglet README.',
         videoGuidesLinkLabel: 'Ouvrir les guides vidéo pratiques OSCAR (`ORNL/oscar-video-guides`)',
-        videoGuidesLinkDesc: '18 courtes vidéos (< 2 min) sous-titrées couvrant certificats, voies, adjudication, EML, OCR véhicules, état de santé, archives d’assistance et rapports.',
+        videoGuidesLinkDesc: '29 courtes vidéos (< 2 min) sous-titrées couvrant préparation terrain Ubuntu/Windows, bac à sable de formation, feux et sirène RPM par voie (WebRelay-Quad), sauvegardes USB NVMe, extensions, cartes .pmtiles hors ligne, radiographies OMD UFF 16 bits, voies, adjudication, EML, OCR véhicules, utilisateurs et Passkeys, fédération, assistance et rapports.',
         supportBundleTitle: 'Dépannage et archive d’assistance (`.zip`)',
         supportBundleDesc: 'Télécharge une archive `.zip` réunissant les diagnostics récents du navigateur et les journaux du serveur OSCAR, l’état des modules et la santé JVM/stockage. Si le serveur est injoignable ou ne démarre pas, exécutez `./oscar.sh support-bundle` (Linux) ou `oscar.bat support-bundle` (Windows) sur l’hôte.',
         supportBundlePrivacyNote: 'Confidentialité et sécurité : collecté uniquement pour le diagnostic technique ; mots de passe, jetons, cookies de session, identifiants RTSP et clés privées sont automatiquement masqués.',
@@ -577,7 +754,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
         closeLabel: 'Fermer',
     },
     el: {
-        dialogTitle: 'Γρήγορος οδηγός χειριστή & γλωσσάριο OSCAR 3.11.0',
+        dialogTitle: 'Γρήγορος οδηγός χειριστή & γλωσσάριο OSCAR 3.11.10',
         dialogSubtitle: 'Αναφορά σε απλή γλώσσα για τις ροές εργασίας κονσόλας, τις αναφορές πολλαπλών μορφών και την ορολογία πυλών ακτινοβολίας.',
         tabs: {
             pages: 'Σελίδες κονσόλας',
@@ -593,7 +770,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 title: 'Συμβάντα (`/event-log`)',
-                summary: 'Ιστορικό διελεύσεων, συναγερμών και βλαβών με κανονικοποιημένη αναζήτηση ID οχήματος / εμπορευματοκιβωτίου ISO 6346 (σύγκριση πολλαπλών διελεύσεων και συνδεδεμένη αξιολόγηση σε τοπικούς και ομόσπονδους κόμβους), αναζήτηση UUID, φίλτρα Κωδικού αξιολόγησης (`Κωδικός 9998`, `Κωδικός 9999`, `1–11` και προσαρμοσμένοι) και μαζική αξιολόγηση.',
+                summary: 'Ιστορικό διελεύσεων, συναγερμών και βλαβών με κανονικοποιημένη αναζήτηση ID οχήματος / εμπορευματοκιβωτίου ISO 6346 (ή επικόλληση UUID / αρχείου `.uff` όταν το Φορτίο NII είναι ενεργό), σύγκριση πολλαπλών διελεύσεων, φίλτρα Κωδικού αξιολόγησης (`Κωδικός 9998`, `Κωδικός 9999`, `1–11` και προσαρμοσμένοι) και μαζική αξιολόγηση.',
             },
             {
                 title: 'Κατάσταση υγείας (`/health`)',
@@ -616,8 +793,20 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
                 summary: 'Εξαγωγή και εισαγωγή κωδικών QR και αρχείων `.oscar-alarm.json` για απομονωμένα περιβάλλοντα χωρίς δίκτυο.',
             },
             {
-                title: 'Κόμβοι (`/servers`)',
-                summary: 'Διαμόρφωση απομακρυσμένων ομοσπονδιακών κόμβων OSCAR με ασφαλή συνεδρία ή διαπιστευτήρια Basic στη μνήμη.',
+                title: 'Χρήστες & πρόσβαση (`/users`)',
+                summary: 'Αυτοδιαχείριση λογαριασμού για εγγραφή κλειδιών πρόσβασης FIDO2 / WebAuthn εκτός δικτύου (Face ID, Touch ID, Windows Hello, YubiKey) και αλλαγή τοπικού κωδικού (ανεξάρτητου από τη σήραγγα Octelium Zero-Trust), καθώς και έλεγχοι διαχειριστή για Χρήστες & ρόλους (`Διαχειριστής`, `Χειριστής`, `Θεατής`), μαζική εγγραφή CSV με κωδικούς QR (`/login/enroll?token=oscar_inv_...`), ανάθεση Λειτουργικών προβολών, διακριτικά ομοσπονδίας (`oscar_fed_...`) με άνοιγμα 1 κλικ στο `/servers?auth=bearer`, πολιτική SSO OIDC / σήραγγας (`ORNL/oscar-federation-hub`, `X-Octelium-Groups`, ιδιωτική CA PEM και εξωτερική κονσόλα χρηστών) και οδηγό αντιγράφων ασφαλείας.',
+            },
+            {
+                title: 'Διακομιστές (`/servers`)',
+                summary: 'Σύνδεση απομακρυσμένων ομόσπονδων κόμβων OSCAR για Εθνική Προβολή (`/national-view`) και Αναζήτηση πολλαπλών διελεύσεων (`/event-log`): πατήστε «Χρήση διακριτικού ομοσπονδίας (oscar_fed_...)», ενεργοποιήστε HTTPS (θύρα 443) και επικολλήστε το διακριτικό που εκδόθηκε στον απομακρυσμένο κόμβο στη σελίδα Χρήστες & πρόσβαση -> Διακριτικά ομοσπονδίας.',
+            },
+            {
+                title: 'Αντίγραφα USB (`/usb-backups`)',
+                summary: 'Διαχείριση αυξητικών αντιγράφων ασφαλείας μηδενικής διακοπής (`0,0 s`) σε εξωτερικό SSD USB 3.x NVMe (`NTFS` προεπιλογή), με Συνεχή ή Περιστασιακό Συγχρονισμό, Ασφαλή Εξαγωγή 1 κλικ (`ΑΣΦΑΛΗΣ ΑΠΟΣΥΝΔΕΣΗ`), επαλήθευση SHA-256 και λήψη του `oscar-backup-key.txt`.',
+            },
+            {
+                title: 'Επεκτάσεις εκτέλεσης (`/extensions`)',
+                summary: 'Μόνιμο κέντρο διαχειριστή (προστατευμένο σε αναβαθμίσεις) για άμεση αντικατάσταση μοντέλων/κανόνων OCR, τοπικών χαρτών `.pmtiles` v3 εκτός δικτύου, βιβλιοθηκών φασματοσκοπίας ισοτόπων, πιστοποιητικών CA X.509, πακέτων κωδίκων κρίσης, προσθέτων EML και προαιρετικών κοινόχρηστων πόρων SMBv2/SMBv3 μόνο ανάγνωσης για Φορτίο NII (WCO UFF 2.0 / 3.0) διατηρώντας τις ενσωματωμένες προεπιλογές.',
             },
         ],
         reportsIntro: 'Κάθε αίτημα δημιουργεί νέο αρχείο και αντικαθιστά τυχόν προηγούμενο αρχείο με τις ίδιες παραμέτρους:',
@@ -708,7 +897,7 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
             },
             {
                 term: 'Λειτουργική προβολή (`?view=<κλειδί>`)',
-                meaning: 'Επώνυμο φίλτρο που περιορίζει την κονσόλα στις λωρίδες που έχουν ανατεθεί στον σταθμό εργασίας.',
+                meaning: 'Επώνυμο φίλτρο επιλέξιμο από το αναπτυσσόμενο μενού Λειτουργική προβολή της επάνω γραμμής (ή μέσω URL `?view=<κλειδί>`) που περιορίζει την κονσόλα στις ανατεθειμένες λωρίδες βάσει των δικαιωμάτων `allowedViews`.',
             },
             {
                 term: 'Διατηρούμενα πολυμέσα 5 καρέ',
@@ -722,12 +911,44 @@ const HELP_CONTENT: Record<Locale, LocalizedHelpContent> = {
                 term: 'OCR εμπορευματοκιβωτίων & πινακίδων (`ocrConfig`)',
                 meaning: 'Προαιρετικό ασύγχρονο OCR παρασκηνίου ανά λωρίδα (απενεργοποιημένο από προεπιλογή). Όταν ενεργοποιηθεί, αναλύει καρέ ανάλογα με CPU/μνήμη, αρχειοθετεί το `vehicleOcr` στο `PARQUET_PRIMARY`, διατηρεί μικρογραφίες JPEG ανά ημερομηνία μαζί με το `frame-03.jpg` (`ocrCropRetentionDays = 365`, προστατεύοντας συμβάντα σε δέσμευση ή αξιολογημένα από χειριστή και διαγράφοντας αμέσως προσωρινά κλιπ εκτός συναγερμού όταν το `Μόνο συναγερμοί` είναι ανενεργό), συμπληρώνει αυτόματα έγκυρους κωδικούς ISO 6346 ή πινακίδες υψηλής εμπιστοσύνης και εμφανίζει επιλέξιμες προτάσεις.',
             },
+            {
+                term: 'Κλειδιά πρόσβασης (WebAuthn / FIDO2) & μόνιμες συνεδρίες',
+                meaning: 'Σύνδεση δημόσιου κλειδιού ανθεκτική στο phishing μέσω Face ID, Touch ID, Windows Hello ή φυσικών κλειδιών ασφαλείας (όπως YubiKey), που επαληθεύεται τοπικά από το OSCAR χωρίς διαδίκτυο. Οι συνεδρίες διατηρούνται μετά από επανεκκίνηση περιηγητή, διακομιστή και `oscar upgrade` έως την αποσύνδεση ή ανάκληση· εγκαταστάσεις χωρίς τηλέφωνα χρησιμοποιούν ατομικούς τοπικούς κωδικούς PBKDF2.',
+            },
+            {
+                term: 'Διακριτικά υπηρεσίας ομοσπονδίας (`oscar_fed_...`)',
+                meaning: 'Περιορισμένα διαπιστευτήρια Bearer / MQTT που εκδίδονται στη σελίδα Χρήστες & πρόσβαση (`/users`) για ομοσπονδία Εθνικής προβολής και αναζήτησης πολλαπλών διελεύσεων οχημάτων χωρίς κοινή χρήση κωδικών διαχειριστή (ρόλος `Θεατής` μόνο ανάγνωσης ή `Χειριστής`).',
+            },
+            {
+                term: 'Επεκτάσεις εκτέλεσης & τοπικά πακέτα (`/extensions`)',
+                meaning: 'Μόνιμο κέντρο διαχείρισης (προστατευμένο κατά τις αναβαθμίσεις) για άμεση αντικατάσταση μοντέλων/κανόνων OCR, τοπικών χαρτών `.pmtiles` εκτός σύνδεσης (`/var/lib/oscar/extensions/maps-storage/`), βιβλιοθηκών φασματοσκοπίας ισοτόπων, πιστοποιητικών CA X.509, πακέτων κωδίκων κρίσης και προσθέτων EML διατηρώντας τις ενσωματωμένες προεπιλογές.',
+            },
+            {
+                term: 'Συνεχή & περιστασιακά αντίγραφα ασφαλείας USB NVMe (`/usb-backups`)',
+                meaning: 'Αυξητικά αντίγραφα ασφαλείας μηδενικής διακοπής (`0,0 s`) σε εξωτερικό SSD USB 3.x NVMe (`NTFS` προεπιλογή, συμβατό με Windows, macOS και Linux), με συνεχή ή κατ’ απαίτηση συγχρονισμό, ασφαλή εξαγωγή 1 κλικ (`SAFE_TO_UNPLUG`), μεταφορά σε φορητό υπολογιστή και πλήρη επαναφορά (`oscar usb-backup restore`).',
+            },
+            {
+                term: 'WCO UFF 2.0 / 3.0 & ακτινογραφίες φορτίου HEMD (`/extensions` -> Φορτίο NII)',
+                meaning: 'Πακέτα Unified File Format (`.uff`) του Παγκόσμιου Οργανισμού Τελωνείων από συστήματα ακτίνων X φορτίου (απενεργοποιημένα από προεπιλογή για μηδενική οπτική επιβάρυνση). Υποστηρίζουν τοπική επιθεώρηση αρχείων `.uff` στη Δευτερεύουσα Επιθεώρηση ή σύνδεση κοινόχρηστου πόρου SMBv2/SMBv3 μόνο ανάγνωσης στις `/extensions` για περιήγηση ανά σαρωτή/χρονικό παράθυρο, αναζήτηση UUID, ασαφή συσχέτιση OCR 1 χαρακτήρα, προβολή TIFF 16-bit με ατομικές ζώνες HEMD (`Z_eff`) ευθυγραμμισμένες στο προφίλ RPM και σύνδεση χωρίς πλήρη μεταφόρτωση.',
+            },
+            {
+                term: 'Πρακτικό περιβάλλον εκπαίδευσης & καθοδηγούμενη ακαδημία (`oscar-sandbox`)',
+                meaning: 'Απομονωμένο προσωρινό περιβάλλον εκπαίδευσης στη θύρα `:8444` (`sudo bash oscar.sh sandbox start` / `.\\oscar.bat sandbox start`) με `archive.enabled = false`, μηδενική εγγραφή στην παραγωγική PostgreSQL/Parquet/`config.json`, τοπικό μικρο-εξομοιωτή Rapiscan + RTSP + OCR + UFF + `WebRelay-Quad` (`127.0.0.1:10180`), πολυτροπικό Οδηγό Εκπαίδευσης (βίντεο 4 γλωσσών, έξυπνη έγχυση που ανοίγει το `/event-log` για `Code 9999` / `Code 9998` / `Clean Pass` και το `/health` για σφάλματα), διπλή προβολή SensorHub Admin, αυτόματη επαλήθευση, PDF ολοκλήρωσης 1 σελίδας και πλήρη εκκαθάριση σε `< 2 s`.',
+            },
+            {
+                term: 'Φώτα και ήχος RPM (`webRelayConfig` — WebRelay-Quad)',
+                meaning: 'Προαιρετικός δικτυακός έλεγχος ρελέ ανά λωρίδα (`enabled = false` από προεπιλογή) για μονάδες ControlByWeb WebRelay-Quad (`X-WR-4R3-E` / `X-410`) μέσω HTTP/XML (`stateFull.xml` / `state.xml`) σε κύρια και προαιρετική βοηθητική μονάδα ξηρών επαφών. Υποστηρίζει Αυτόματη λειτουργία (`AUTO`) (όπλιση `R1=1, R2=1`, καταστολή `Code 9999` και προαιρετικά `Code 9998`, παλμό `R3` κόκκινου φωτός γάμμα + σειρήνας ή/και `R4` μπλε φωτός νετρονίων σε πραγματικούς συναγερμούς και ασφαλή επαναφορά `0,0,0,0` κατά τη διακοπή), `PASS_THROUGH`, `MUTED` και ζωντανό χειροκίνητο έλεγχο διαχειριστή στις σελίδες `/health`, `/lane-view` και `/sensorhub/admin`.',
+            },
+            {
+                term: 'Διαμεσολαβητής άκρου RPM για παράλληλη λειτουργία με CAS (`oscar-rpm-proxy`)',
+                meaning: 'Προαιρετική απομονωμένη στοίβα Docker (`sudo bash oscar.sh rpm-proxy` / `.\\oscar.bat rpm-proxy`) για παράλληλη λειτουργία του OSCAR με υπάρχοντα Κεντρικό Σταθμό Συναγερμών (CAS). Διανέμει `1–50` ροές TCP Rapiscan RPM σε πραγματικό χρόνο (`< 1 ms`) μέσω χαρτογραφημένων θυρών (`11601..11650`) ή διαφανούς εικονικής IP `:1600` στο Ubuntu 24.04, αναπαράγει πλαίσια `SG1..SG3` / `SN1..SN2`, διατηρεί τον CAS συνδεδεμένο σε επανεκκινήσεις/αναβαθμίσεις του OSCAR και μεταδίδει φυσικές αποσυνδέσεις RPM σε `<= 4,0 s`.',
+            },
         ],
         linksIntro: 'Ανοίξτε το πλήρες εγχειρίδιο διαχειριστή ή παρακολουθήστε τους σύντομους βιντεοοδηγούς:',
         adminLinkLabel: 'Άνοιγμα διαχείρισης SensorHub & ενσωματωμένου εγχειριδίου (`/sensorhub/admin`)',
         adminLinkDesc: 'Απαιτείται σύνδεση διαχειριστή. Επιλέξτε την Υπηρεσία OSCAR ή οποιαδήποτε μονάδα και ανοίξτε την καρτέλα README.',
         videoGuidesLinkLabel: 'Άνοιγμα βιντεοοδηγών εργασιών OSCAR (`ORNL/oscar-video-guides`)',
-        videoGuidesLinkDesc: '18 σύντομα βίντεο (< 2 λεπ.) με υπότιτλους για πιστοποιητικά, λωρίδες, αξιολόγηση, EML, OCR οχημάτων, κατάσταση υγείας, πακέτα υποστήριξης και αναφορές.',
+        videoGuidesLinkDesc: '29 σύντομα βίντεο (< 2 λεπ.) με υπότιτλους για εγκατάσταση πεδίου Ubuntu/Windows, περιβάλλον εκπαίδευσης, έλεγχο φώτων & ήχου RPM ανά λωρίδα (WebRelay-Quad), αντίγραφα USB NVMe, επεκτάσεις, χάρτες .pmtiles εκτός σύνδεσης, ακτινογραφίες φορτίου WCO UFF 16-bit, λωρίδες, αξιολόγηση, EML, OCR οχημάτων, χρήστες & Passkeys, ομοσπονδία, πακέτα υποστήριξης και αναφορές.',
         supportBundleTitle: 'Αντιμετώπιση προβλημάτων & πακέτο υποστήριξης (`.zip`)',
         supportBundleDesc: 'Λήψη ενιαίου διαγνωστικού αρχείου `.zip` που συνδυάζει συμβάντα του περιηγητή με αρχεία καταγραφής διακομιστή OSCAR, κατάσταση μονάδων και υγεία JVM/αποθήκευσης. Εάν ο διακομιστής δεν αποκρίνεται ή δεν εκκινεί, εκτελέστε `./oscar.sh support-bundle` (Linux) ή `oscar.bat support-bundle` (Windows) στον κεντρικό υπολογιστή.',
         supportBundlePrivacyNote: 'Απόρρητο & ασφάλεια: συλλέγονται αποκλειστικά για τεχνική διάγνωση· κωδικοί, διακριτικά, cookies συνεδρίας, διαπιστευτήρια RTSP και ιδιωτικά κλειδιά αφαιρούνται αυτόματα.',
@@ -784,6 +1005,7 @@ export default function HelpDialog({
     fetchImpl,
     skipBrowserDownload,
     onBundleExported,
+    onOpenGuidedWalkthrough,
 }: {
     open: boolean;
     onClose: () => void;
@@ -793,6 +1015,7 @@ export default function HelpDialog({
     fetchImpl?: typeof fetch;
     skipBrowserDownload?: boolean;
     onBundleExported?: (result: SupportBundleExportResult) => void;
+    onOpenGuidedWalkthrough?: () => void;
 }) {
     const { language } = useLanguage();
     const activeLocale: Locale = HELP_CONTENT[language] ? language : 'en';
@@ -844,6 +1067,28 @@ export default function HelpDialog({
             setFocusPendingSlug(null);
         }
     }, [activeGuide, focusPendingSlug, open]);
+
+    React.useEffect(() => {
+        const videoEl = videoRef.current;
+        if (!open || !videoEl || !activeGuide) return;
+        const applySync = () => syncVideoElementCaptionLocale(videoEl, activeLocale);
+        applySync();
+        const textTracks = videoEl.textTracks;
+        textTracks?.addEventListener?.('addtrack', applySync);
+        return () => {
+            textTracks?.removeEventListener?.('addtrack', applySync);
+        };
+    }, [activeGuide, activeLocale, open]);
+
+    const handleHighlightControl = React.useCallback(
+        (iconKey: PlatformIconKey) => {
+            const def = PLATFORM_ICONS[iconKey];
+            if (!def) return;
+            onClose();
+            triggerPlatformSpotlight(def.spotlightSelector, { delayMs: 80 });
+        },
+        [onClose],
+    );
 
     const handleCloseActiveVideo = React.useCallback((restoreTriggerFocus = true) => {
         videoRef.current?.pause();
@@ -1090,13 +1335,16 @@ export default function HelpDialog({
                                     data-testid="help-video-element"
                                 >
                                     <source src={activeGuide.mp4Url} type="video/mp4" />
-                                    <track
-                                        kind="captions"
-                                        src={activeGuide.vttUrl}
-                                        srcLang="en"
-                                        label="English"
-                                        default
-                                    />
+                                    {getVideoGuideCaptionTracks(activeGuide).map((track) => (
+                                        <track
+                                            key={track.locale}
+                                            kind="captions"
+                                            src={track.src}
+                                            srcLang={track.locale}
+                                            label={track.label}
+                                            default={activeLocale === track.locale}
+                                        />
+                                    ))}
                                 </video>
                             </Box>
                             <Typography variant="caption" color="text.secondary">
@@ -1115,18 +1363,97 @@ export default function HelpDialog({
                             const pageGuides = resolveVideoGuidesBySlugs(
                                 CONSOLE_PAGE_CARD_GUIDE_SLUGS[pageIndex] ?? [],
                             );
+                            const pageIconKey = CONSOLE_PAGE_CARD_ICON_KEYS[pageIndex];
+                            const iconDef = pageIconKey ? PLATFORM_ICONS[pageIconKey] : undefined;
+                            const IconComp = iconDef?.Icon;
                             return (
                                 <Paper key={item.title} variant="outlined" sx={{ p: 1.5 }}>
-                                    <Typography variant="subtitle2" fontWeight={700}>
-                                        {item.title}
-                                    </Typography>
+                                    <Stack
+                                        direction="row"
+                                        justifyContent="space-between"
+                                        alignItems="center"
+                                        spacing={1}
+                                        useFlexGap
+                                        flexWrap="wrap"
+                                    >
+                                        <Stack direction="row" spacing={1} alignItems="center" sx={{ minInlineSize: 0 }}>
+                                            {pageIconKey && <PlatformIconBadge iconKey={pageIconKey} size="card" />}
+                                            <Typography variant="subtitle2" fontWeight={700}>
+                                                {renderTextWithIconsAndCode(item.title)}
+                                            </Typography>
+                                        </Stack>
+                                        {pageIconKey && iconDef && IconComp && (
+                                            <Button
+                                                type="button"
+                                                size="small"
+                                                variant="outlined"
+                                                startIcon={<IconComp fontSize="small" aria-hidden="true" />}
+                                                endIcon={<GpsFixedRoundedIcon sx={{ fontSize: '14px !important', opacity: 0.78 }} aria-hidden="true" />}
+                                                onClick={() => handleHighlightControl(pageIconKey)}
+                                                data-testid={`help-highlight-page-${pageIconKey}`}
+                                                sx={{ ...touchSafeButtonSx, textTransform: 'none', fontSize: '0.76rem' }}
+                                            >
+                                                {iconDef.highlightLabel[activeLocale]}
+                                            </Button>
+                                        )}
+                                    </Stack>
+                                    {pageIconKey && iconDef && (
+                                        <Typography
+                                            variant="caption"
+                                            color="primary.main"
+                                            data-testid={`help-page-symbol-note-${pageIconKey}`}
+                                            sx={{ display: 'block', mt: 0.65, fontWeight: 600 }}
+                                        >
+                                            <PlatformIconBadge iconKey={pageIconKey} size="inline" />
+                                            {iconDef.locationNote[activeLocale]}
+                                        </Typography>
+                                    )}
                                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                                        {item.summary}
+                                        {renderTextWithIconsAndCode(item.summary)}
                                     </Typography>
                                     {renderWatchButtons(pageGuides, item.title, `help-page-${pageIndex}-guide`)}
                                 </Paper>
                             );
                         })}
+                        <Paper variant="outlined" sx={{ p: 1.5 }} data-testid="help-top-bar-tools-card">
+                            <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>
+                                {TOP_BAR_TOOLS_CARD_TITLE[activeLocale]}
+                            </Typography>
+                            <Stack spacing={1}>
+                                {TOP_BAR_TOOL_ICON_KEYS.map((toolKey) => {
+                                    const toolDef = PLATFORM_ICONS[toolKey];
+                                    const ToolIcon = toolDef.Icon;
+                                    return (
+                                        <Stack
+                                            key={toolKey}
+                                            direction="row"
+                                            justifyContent="space-between"
+                                            alignItems="center"
+                                            spacing={1}
+                                            useFlexGap
+                                            flexWrap="wrap"
+                                        >
+                                            <Typography variant="body2" color="text.secondary">
+                                                <PlatformIconBadge iconKey={toolKey} size="inline" />
+                                                {toolDef.locationNote[activeLocale]}
+                                            </Typography>
+                                            <Button
+                                                type="button"
+                                                size="small"
+                                                variant="text"
+                                                startIcon={<ToolIcon fontSize="small" aria-hidden="true" />}
+                                                endIcon={<GpsFixedRoundedIcon sx={{ fontSize: '14px !important', opacity: 0.78 }} aria-hidden="true" />}
+                                                onClick={() => handleHighlightControl(toolKey)}
+                                                data-testid={`help-highlight-tool-${toolKey}`}
+                                                sx={{ ...touchSafeButtonSx, textTransform: 'none', fontSize: '0.76rem' }}
+                                            >
+                                                {toolDef.highlightLabel[activeLocale]}
+                                            </Button>
+                                        </Stack>
+                                    );
+                                })}
+                            </Stack>
+                        </Paper>
                     </Stack>
                 )}
 
@@ -1390,6 +1717,33 @@ export default function HelpDialog({
                                         })}
                                     </Stack>
                                 </Box>
+                            </Stack>
+                        </Paper>
+                        <TrainingSandboxLauncherCard
+                            locale={activeLocale}
+                            onOpenGuidedWalkthrough={onOpenGuidedWalkthrough}
+                        />
+                        <Paper variant="outlined" sx={{ p: 2 }} data-testid="help-system-update-card">
+                            <Stack spacing={1} alignItems="flex-start">
+                                <Typography variant="subtitle2" fontWeight={700}>
+                                    {(SYSTEM_UPDATE_SHORTCUT_COPY[activeLocale] || SYSTEM_UPDATE_SHORTCUT_COPY.en).title}
+                                </Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                    {(SYSTEM_UPDATE_SHORTCUT_COPY[activeLocale] || SYSTEM_UPDATE_SHORTCUT_COPY.en).desc}
+                                </Typography>
+                                <Button
+                                    component={Link}
+                                    href="/users?tab=update"
+                                    prefetch={false}
+                                    variant="outlined"
+                                    size="small"
+                                    startIcon={<SystemUpdateAltRoundedIcon fontSize="small" aria-hidden="true" />}
+                                    onClick={onClose}
+                                    data-testid="help-open-system-update-btn"
+                                    sx={touchSafeButtonSx}
+                                >
+                                    {(SYSTEM_UPDATE_SHORTCUT_COPY[activeLocale] || SYSTEM_UPDATE_SHORTCUT_COPY.en).button}
+                                </Button>
                             </Stack>
                         </Paper>
                         <Paper variant="outlined" sx={{ p: 2 }} data-testid="help-support-bundle-card">

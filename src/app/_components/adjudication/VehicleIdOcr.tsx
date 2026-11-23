@@ -136,6 +136,12 @@ export default function VehicleIdOcr({
     onResultsRef.current = onResults;
 
     const laneEntry = laneMapRef?.current?.get(event.laneId);
+    const laneMapReady = Boolean(context?.laneMapReady);
+    const isLaneReady = Boolean(event.laneId && context?.readyLaneNames?.has(event.laneId));
+    const ocrStreamIdsKey = (laneEntry?.datastreams ?? [])
+        .filter(isVehicleOcrDataStream)
+        .map((stream: any) => String(stream?.properties?.id ?? ""))
+        .join("|");
     const activeNode: OcrBucketNode | null = nodeOverride !== undefined
         ? nodeOverride
         : (laneEntry?.parentNode ?? null);
@@ -279,7 +285,10 @@ export default function VehicleIdOcr({
         event.startTime,
         event.endTime,
         initialResults,
+        isLaneReady,
+        laneMapReady,
         laneMapRef,
+        ocrStreamIdsKey,
     ]);
 
     const evidencePathsKey = useMemo(

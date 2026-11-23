@@ -18,6 +18,7 @@ import {
     isTamperDataStream,
     isVideoDataStream,
 } from "@/lib/data/oscar/Utilities";
+import {OSCAR_SANDBOX_TELEMETRY_EVENT} from "@/lib/data/oscar/TrainingSandboxApi";
 
 export type ConnectionState = "online" | "offline" | "unknown";
 export type TelemetryState = "active" | "clear" | "unknown";
@@ -44,6 +45,8 @@ export interface LaneHealth {
     nodeName: string;
     rpm: ComponentHealth;
     cameras: ComponentHealth[];
+    webRelayConfigured?: boolean;
+    webRelays?: ComponentHealth[];
     faults: FaultHealth;
     occupancyState: OccupancyState;
     occupancyStartedAt: number | null;
@@ -153,6 +156,7 @@ async function fetchHealthQueryPage(
         const fetchOptions: RequestInit = {
             method: "GET",
             credentials: "include",
+            cache: "no-store",
             headers: query.headers ?? {},
             signal,
             ...(lowPriority ? ({priority: "low"} as RequestInit) : {}),
@@ -277,6 +281,20 @@ function streamKind(stream: any): StreamKind | null {
 }
 
 const LANE_THRESHOLD_KEYWORD_PREFIX = "oscar:extended-occupancy-threshold-min:";
+const LANE_WEBRELAY_ENABLED_KEYWORD = "oscar:webrelay-enabled:true";
+
+function extractLaneWebRelayConfigured(lane: LaneMapEntry): boolean {
+    for (const system of lane.systems ?? []) {
+        const keywords = system?.properties?.keywords ?? system?.properties?.properties?.keywords;
+        if (!Array.isArray(keywords)) continue;
+        for (const raw of keywords) {
+            if (typeof raw === "string" && raw.trim().toLowerCase() === LANE_WEBRELAY_ENABLED_KEYWORD) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 function clampThresholdMinutes(value: unknown, fallback = DEFAULT_OCCUPANCY_THRESHOLD_MINUTES): number {
     const numeric = Number(value);
@@ -329,6 +347,7 @@ function buildLaneHealth(laneName: string, lane: LaneMapEntry): LaneHealth {
     const configuredThreshold = extractLaneThresholdMinutes(lane);
     const mobile = lane.datastreams.some((stream: any) =>
         isMobileGpsDataStream(stream) || isD5RadiometricStatusDataStream(stream));
+    const webRelayConfigured = extractLaneWebRelayConfigured(lane);
 
     return {
         laneName,
@@ -341,6 +360,7 @@ function buildLaneHealth(laneName: string, lane: LaneMapEntry): LaneHealth {
         },
         cameras: Array.from(cameraSystems.values())
             .sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true})),
+        ...(webRelayConfigured ? {webRelayConfigured: true} : {}),
         faults: faultDefaults(),
         occupancyState: "unknown",
         occupancyStartedAt: null,
@@ -387,7 +407,9 @@ export function deriveLaneHealthRows(
         // mark the lane as unknown or faulted.
         const portalFaults = lane.mobile ? [] : Object.values(lane.faults);
         const hasFault = portalFaults.includes("active") || extendedOccupancy === "active";
-        const hasOfflineComponent = lane.rpm.state === "offline" || lane.cameras.some((camera) => camera.state === "offline");
+        const hasOfflineComponent = lane.rpm.state === "offline"
+            || lane.cameras.some((camera) => camera.state === "offline")
+            || (lane.webRelays ?? []).some((relay) => relay.state === "offline");
         const hasUnknownTelemetry = lane.rpm.state === "unknown"
             || lane.cameras.some((camera) => camera.state === "unknown")
             || portalFaults.includes("unknown")
@@ -924,8 +946,31 @@ export function useLaneHealth() {
         };
 
         void initialize();
+
+        let followUpTimer: number | null = null;
+        const handleSandboxTelemetryMutation = () => {
+            void requestFreshReconciliation();
+            if (followUpTimer != null) {
+                window.clearTimeout(followUpTimer);
+            }
+            followUpTimer = window.setTimeout(() => {
+                if (active) {
+                    void requestFreshReconciliation();
+                }
+            }, 650);
+        };
+        if (typeof window !== "undefined") {
+            window.addEventListener(OSCAR_SANDBOX_TELEMETRY_EVENT, handleSandboxTelemetryMutation);
+        }
+
         return () => {
             active = false;
+            if (typeof window !== "undefined") {
+                window.removeEventListener(OSCAR_SANDBOX_TELEMETRY_EVENT, handleSandboxTelemetryMutation);
+            }
+            if (followUpTimer != null) {
+                window.clearTimeout(followUpTimer);
+            }
             healthRequestControllers.forEach((controller) => controller.abort());
             healthRequestControllers.clear();
             if (reconcileLatestRef.current === requestFreshReconciliation)

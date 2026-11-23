@@ -9,6 +9,7 @@ import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import {useLanguage} from "@/app/contexts/LanguageContext";
 import EventUuidLookup from "@/app/_components/event-table/EventUuidLookup";
+import {PlatformIconBadge} from "@/app/_components/common/PlatformIcons";
 
 function EventLogTableWithParams({laneMap}: {laneMap: Map<string, LaneMapEntry>}) {
     const searchParams = useSearchParams();
@@ -37,9 +38,12 @@ export default function EventLogPage() {
                     justifyContent="space-between"
                     alignItems={{md: "flex-start"}}
                 >
-                    <Typography variant="h4">
-                        { t('events') }
-                    </Typography>
+                    <Stack direction="row" spacing={1.25} alignItems="center">
+                        <PlatformIconBadge iconKey="events" size="header" />
+                        <Typography variant="h4">
+                            { t('events') }
+                        </Typography>
+                    </Stack>
                     <EventUuidLookup/>
                 </Stack>
             </Grid>

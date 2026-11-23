@@ -14,7 +14,7 @@ export default function LanguageSelector() {
   };
 
   return (
-    <FormControl size="small" variant="standard" sx={{ m: 1, minWidth: 120 }}>
+    <FormControl size="small" variant="standard" data-testid="navbar-language-selector" sx={{ m: 1, minWidth: 120 }}>
       <Select
         id="language-select"
         value={language}

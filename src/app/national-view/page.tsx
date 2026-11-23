@@ -17,6 +17,7 @@ import {generateNationalCommandJSON} from "@/lib/data/oscar/OSCARCommands";
 import ControlStreamFilter from "osh-js/source/core/consysapi/controlstream/ControlStreamFilter";
 import { useBreakpoint } from "../providers";
 import {useLanguage} from "@/app/contexts/LanguageContext";
+import {PlatformIconBadge} from "@/app/_components/common/PlatformIcons";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {selectLaneMap} from "@/lib/state/OSCARLaneSlice";
 import {
@@ -478,9 +479,12 @@ export default function NationalViewPage() {
 
             {/* HEADER */}
             <Grid item xs={12}>
-                <Typography variant="h4">
-                    { t('national') }
-                </Typography>
+                <Stack direction="row" spacing={1.25} alignItems="center">
+                    <PlatformIconBadge iconKey="national" size="header" />
+                    <Typography variant="h4">
+                        { t('national') }
+                    </Typography>
+                </Stack>
             </Grid>
 
             {/* OPTIONS */}

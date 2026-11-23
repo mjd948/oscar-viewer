@@ -14,10 +14,12 @@ import "@/app/style/global.css";
 import SuspenseLoad from "./_components/SuspenseLoad";
 import {LanguageProvider} from "@/app/contexts/LanguageContext";
 import {installSupportDiagnosticsRecorder} from "@/lib/data/oscar/SupportDiagnostics";
+import {installTunnelSessionSelfHeal} from "@/lib/data/oscar/TunnelSessionSelfHeal";
 
 export default function Providers({ children }: { children: ReactNode }) {
   useEffect(() => {
     installSupportDiagnosticsRecorder();
+    installTunnelSessionSelfHeal();
   }, []);
 
   // Get system preference for dark/light mode

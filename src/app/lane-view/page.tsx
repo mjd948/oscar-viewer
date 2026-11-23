@@ -1,7 +1,13 @@
 "use client";
 
-import {Alert, Grid, Paper, Stack, ToggleButton, ToggleButtonGroup, Typography} from "@mui/material";
+import {Alert, Button, Chip, Grid, Paper, Stack, ToggleButton, ToggleButtonGroup, Typography} from "@mui/material";
+import CampaignRoundedIcon from "@mui/icons-material/CampaignRounded";
 import BackButton from "../_components/BackButton";
+import LaneWebRelayDialog from "@/app/_components/webrelay/LaneWebRelayDialog";
+import {
+    fetchLaneWebRelayStatusSafe,
+    type LaneWebRelayStatusEntry,
+} from "@/lib/data/oscar/WebRelayApi";
 import LaneStatus from "../_components/lane-view/LaneStatus";
 import Media from "../_components/lane-view/Media";
 import {
@@ -50,6 +56,26 @@ export default function LaneViewPage() {
 
     const [dataSourcesByLane, setDataSourcesByLane] = useState<LaneDSColl>(null);
     const [toggleView, setToggleView] = useState(savedToggleState);
+    const [isAdmin, setIsAdmin] = useState(false);
+    const [laneWebRelay, setLaneWebRelay] = useState<LaneWebRelayStatusEntry | undefined>(undefined);
+    const [webRelayDialogOpen, setWebRelayDialogOpen] = useState(false);
+
+    useEffect(() => {
+        let active = true;
+        const controller = new AbortController();
+        void fetchLaneWebRelayStatusSafe({signal: controller.signal}).then((payload) => {
+            if (!active || !payload) return;
+            setIsAdmin(Boolean(payload.isAdmin));
+            const found = (payload.lanes ?? []).find(
+                (item) => item.laneName === currentLane || item.laneUid === currentLane
+            );
+            setLaneWebRelay(found);
+        });
+        return () => {
+            active = false;
+            controller.abort();
+        };
+    }, [currentLane]);
 
 
     const toggleButtons = [
@@ -151,6 +177,33 @@ export default function LaneViewPage() {
                         {t('laneIdValue', {lane: currentLane})}
                     </Typography>
                 </Grid>
+                {laneWebRelay?.enabled && (
+                    <Grid item>
+                        <Chip
+                            size="small"
+                            variant="outlined"
+                            color={laneWebRelay.primaryOnline ? "success" : "error"}
+                            label={`${t("webrelayChipPrimary")} (${laneWebRelay.mode}) · ${
+                                laneWebRelay.primaryOnline ? t("online") : t("offline")
+                            }`}
+                            data-testid="lane-view-webrelay-chip"
+                        />
+                    </Grid>
+                )}
+                {isAdmin && currentLane && (
+                    <Grid item>
+                        <Button
+                            type="button"
+                            size="small"
+                            variant="outlined"
+                            startIcon={<CampaignRoundedIcon/>}
+                            onClick={() => setWebRelayDialogOpen(true)}
+                            data-testid="lane-view-webrelay-btn"
+                        >
+                            {t("webrelayHeaderButton")}
+                        </Button>
+                    </Grid>
+                )}
             </Grid>
 
             {laneMapReady && currentLane && !entry ? (
@@ -217,6 +270,19 @@ export default function LaneViewPage() {
                         </Paper>
                     </Grid>
                 </>
+            )}
+            {isAdmin && (
+                <LaneWebRelayDialog
+                    open={webRelayDialogOpen}
+                    initialLaneNameOrUid={currentLane}
+                    onClose={() => setWebRelayDialogOpen(false)}
+                    onUpdated={(nextLanes) => {
+                        const found = nextLanes.find(
+                            (item) => item.laneName === currentLane || item.laneUid === currentLane
+                        );
+                        setLaneWebRelay(found);
+                    }}
+                />
             )}
         </Grid>
     );

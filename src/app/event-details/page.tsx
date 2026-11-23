@@ -91,6 +91,8 @@ export default function EventDetailsPage() {
     const [liveIdentityState, setLiveIdentityState] = useState<LiveIdentityState>("idle");
     const [liveIdentityRetryKey, setLiveIdentityRetryKey] = useState(0);
     const resolvedIdentityRef = useRef<{eventId: string; nodeId: string} | null>(null);
+    const eventPreviewDataRef = useRef<EventTableData | null>(eventPreview.eventData ?? null);
+    eventPreviewDataRef.current = eventPreview.eventData ?? null;
     const eventData = sharedRequested
         ? shared.event
         : lookupRequested
@@ -154,9 +156,27 @@ export default function EventDetailsPage() {
 
         const previouslyResolved = resolvedIdentityRef.current;
         if (previouslyResolved?.eventId === normalizedEventId
-            && previouslyResolved.nodeId === requestedNodeId) {
+            && (!requestedNodeId || previouslyResolved.nodeId === requestedNodeId)) {
             setLookupState("ready");
             return;
+        }
+
+        const previewCandidate = eventPreviewDataRef.current;
+        if (previewCandidate?.occupancyObsId === normalizedEventId && previewCandidate.laneId) {
+            const candidateLane = laneMapRef.current?.get(previewCandidate.laneId);
+            if (candidateLane && (!requestedNodeId || candidateLane.parentNode.id === requestedNodeId)) {
+                const resolvedNodeId = candidateLane.parentNode.id;
+                resolvedIdentityRef.current = {eventId: normalizedEventId, nodeId: resolvedNodeId};
+                setResolvedEvent(previewCandidate);
+                setLookupState("ready");
+                dispatch(setSelectedRowId(previewCandidate.id));
+                dispatch(setSelectedEvent(previewCandidate));
+                dispatch(setEventData(previewCandidate));
+                if (requestedEventId !== normalizedEventId || requestedNodeId !== resolvedNodeId) {
+                    router.replace(scopedHref(buildEventDetailsHref(normalizedEventId, resolvedNodeId, fromFiltered)));
+                }
+                return;
+            }
         }
 
         const controller = new AbortController();

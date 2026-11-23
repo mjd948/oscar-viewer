@@ -16,22 +16,40 @@ import {runWithConcurrency} from "@/lib/data/oscar/BulkAdjudication";
 const MAX_WINDOW_RESULTS_PER_STREAM = 500;
 const WINDOW_QUERY_CONCURRENCY = 4;
 
+export function buildBoundedResultTimeRange(
+    windowStartIso: string,
+    windowEndIso?: string | null,
+): string {
+    const end = typeof windowEndIso === "string" ? windowEndIso.trim() : "";
+    if (!end) {
+        return `${windowStartIso}/..`;
+    }
+    const startMs = Date.parse(windowStartIso);
+    const endMs = Date.parse(end);
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs < startMs) {
+        return `${end}/${windowStartIso}`;
+    }
+    return `${windowStartIso}/${end}`;
+}
+
 export async function fetchVehicleOcrWindow(
     datastreams: Array<typeof DataStream>,
     windowStartIso: string,
     signal?: AbortSignal,
+    windowEndIso?: string | null,
 ): Promise<Map<string, IVehicleOcrResult>> {
     if (datastreams.length === 0 || signal?.aborted) {
         return new Map();
     }
     const grouped = new Map<string, IVehicleOcrResult[]>();
+    const resultTime = buildBoundedResultTimeRange(windowStartIso, windowEndIso);
 
     await runWithConcurrency(datastreams, WINDOW_QUERY_CONCURRENCY, async (stream) => {
         if (signal?.aborted) return;
         try {
             const collection = await stream.searchObservations(
                 new ObservationFilter({
-                    resultTime: `${windowStartIso}/..`,
+                    resultTime,
                     order: "desc",
                 } as any),
                 MAX_WINDOW_RESULTS_PER_STREAM,
@@ -89,18 +107,20 @@ export async function fetchAdjudicatedVehicleIdsWindow(
     datastreams: Array<typeof DataStream>,
     windowStartIso: string,
     signal?: AbortSignal,
+    windowEndIso?: string | null,
 ): Promise<Map<string, string>> {
     if (datastreams.length === 0 || signal?.aborted) {
         return new Map();
     }
     const latestByObsId = new Map<string, {vehicleId: string; timeMs: number}>();
+    const resultTime = buildBoundedResultTimeRange(windowStartIso, windowEndIso);
 
     await runWithConcurrency(datastreams, WINDOW_QUERY_CONCURRENCY, async (stream) => {
         if (signal?.aborted) return;
         try {
             const collection = await stream.searchObservations(
                 new ObservationFilter({
-                    resultTime: `${windowStartIso}/..`,
+                    resultTime,
                     order: "desc",
                 } as any),
                 MAX_WINDOW_RESULTS_PER_STREAM,

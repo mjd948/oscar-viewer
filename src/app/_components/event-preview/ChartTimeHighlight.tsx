@@ -5,7 +5,7 @@
 'use client';
 
 import React, {useEffect, useMemo, useRef, useState} from "react";
-import {Box, Grid, Stack, ToggleButton, ToggleButtonGroup} from "@mui/material";
+import {Alert, Box, Grid, Stack, ToggleButton, ToggleButtonGroup} from "@mui/material";
 import ChartJsView from "osh-js/source/core/ui/view/chart/ChartJsView.js";
 import ConSysApi from "osh-js/source/core/datasource/consysapi/ConSysApi.datasource";
 import annotationPlugin from 'chartjs-plugin-annotation';
@@ -24,6 +24,7 @@ import {
     destroyChartView,
     DETECTOR_DATASET_OPTIONS,
     type DetectorPlotLayout,
+    EVENT_CHART_MAX_VALUES,
     getEventChartBoundsMs,
     getStoredDetectorPlotLayout,
     patchChartViewMultiCurveSync,
@@ -31,6 +32,7 @@ import {
     sortTooltipByHighestCps,
 } from "@/app/utils/ChartUtils";
 import {useLanguage} from '@/app/contexts/LanguageContext';
+import {getIntlLocale} from '@/app/utils/LocaleUtils';
 
 
 type CurveLayers = {
@@ -734,8 +736,29 @@ export default function ChartTimeHighlight(props: ChartInterceptProps) {
         </Box>
     );
 
+    const locale = getIntlLocale(language);
+    const exceedsSampleCapWindow = useMemo(() => {
+        const startMs = Date.parse(props.eventData?.startTime ?? "");
+        const endMs = Date.parse(props.eventData?.endTime ?? "");
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
+        return (endMs - startMs) > (EVENT_CHART_MAX_VALUES / 5) * 1000;
+    }, [props.eventData?.endTime, props.eventData?.startTime]);
+    const sampleCapBanner = exceedsSampleCapWindow ? (
+        <Alert
+            severity="info"
+            role="status"
+            data-testid="event-chart-sample-cap-notice"
+            sx={{mb: 1, py: 0.25, "& .MuiAlert-message": {textWrap: "pretty"}}}
+        >
+            {t("eventChartSampleCapNotice", {
+                max: EVENT_CHART_MAX_VALUES.toLocaleString(locale),
+            })}
+        </Alert>
+    ) : null;
+
     const aggregateCharts = (
-        <Box display='flex' alignItems="center">
+        <Box display='flex' flexDirection="column" alignItems="stretch">
+            {!props.showDetectorModes && sampleCapBanner}
             <Grid container direction="column" spacing={2}>
                 {renderChartsByStatus()}
             </Grid>
@@ -746,6 +769,11 @@ export default function ChartTimeHighlight(props: ChartInterceptProps) {
 
     return (
         <Grid container spacing={2}>
+            {sampleCapBanner && (
+                <Grid item xs={12}>
+                    {sampleCapBanner}
+                </Grid>
+            )}
             <Grid item xs={12}>
                 <Stack
                     direction={{xs: "column", sm: "row"}}

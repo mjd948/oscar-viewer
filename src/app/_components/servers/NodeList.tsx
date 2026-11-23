@@ -6,7 +6,7 @@
 import {useSelector} from "react-redux";
 import {removeNode, selectNodes, setNodes} from "@/lib/state/OSHSlice";
 import {RootState} from "@/lib/state/Store";
-import {Box, Button, Card, Snackbar, SnackbarCloseReason, Typography} from "@mui/material";
+import {Box, Button, Card, Chip, Snackbar, SnackbarCloseReason, Stack, Typography} from "@mui/material";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
 import ListItemText from "@mui/material/ListItemText";
@@ -14,6 +14,7 @@ import {INode, Node} from "@/lib/data/osh/Node";
 import {useAppDispatch} from "@/lib/state/Hooks";
 import React, {useState} from "react";
 import {useLanguage} from "@/app/contexts/LanguageContext";
+import {PlatformIconBadge} from "@/app/_components/common/PlatformIcons";
 
 interface NodeListProps {
     modeChangeCallback?: (editMode: boolean, editNode: INode) => void
@@ -68,17 +69,42 @@ export default function NodeList({modeChangeCallback}: NodeListProps) {
     };
     return (
         <Box sx={{width: '100%'}}>
-            <Typography variant="h4" align="left" sx={{margin: 2}}>
-                { t('nodes') }
-            </Typography>
+            <Stack direction="row" spacing={1.25} alignItems="center" sx={{margin: 2}}>
+                <PlatformIconBadge iconKey="servers" size="header" />
+                <Typography variant="h4" align="left">
+                    { t('nodes') }
+                </Typography>
+            </Stack>
             {nodes.length === 0 ? (
                 <p>{t('noNodes')}</p>
             ) : (
                 <List>
                     {nodes.map((node: INode) => (
-                        <Card key={node.address + node.port} sx={{backgroundColor: getBGColor(node.isDefaultNode)}}>
+                        <Card key={node.id || (node.address + node.port)} sx={{backgroundColor: getBGColor(node.isDefaultNode)}}>
                             <ListItem sx={{m: 0}}>
-                                <ListItemText primary={node.name} secondary={node.address}/>
+                                <ListItemText
+                                    primary={
+                                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                                            <span>{node.name}</span>
+                                            <Chip
+                                                size="small"
+                                                variant="outlined"
+                                                label={
+                                                    node.authenticationMode === "bearer"
+                                                        ? t('nodeAuthBadgeFederation')
+                                                        : node.authenticationMode === "basic"
+                                                            ? t('nodeAuthBadgeBasic')
+                                                            : t('nodeAuthBadgeSession')
+                                                }
+                                            />
+                                        </Stack>
+                                    }
+                                    secondary={
+                                        node.serverNodeUid
+                                            ? `${node.address}:${node.port} • ${node.serverNodeUid}`
+                                            : `${node.address}:${node.port}`
+                                    }
+                                />
                                 <Button
                                     variant="contained"
                                     size={"small"}

@@ -13,6 +13,7 @@ import DoneAllOutlinedIcon from "@mui/icons-material/DoneAllOutlined";
 import GavelOutlinedIcon from "@mui/icons-material/GavelOutlined";
 import MarkEmailReadOutlinedIcon from "@mui/icons-material/MarkEmailReadOutlined";
 import MarkEmailUnreadOutlinedIcon from "@mui/icons-material/MarkEmailUnreadOutlined";
+import ScheduleRoundedIcon from "@mui/icons-material/ScheduleRounded";
 import { AlarmTimeWindowPreset } from "@/lib/data/oscar/EventTableRequests";
 
 export interface ToolbarTimeWindowOption {
@@ -26,10 +27,12 @@ export interface CustomToolbarProps {
   rowCount?: number;
   allFilteredSelected?: boolean;
   unreadOnly?: boolean;
+  sortByTimeOnly?: boolean;
   timeWindowPreset?: AlarmTimeWindowPreset;
   timeWindowOptions?: readonly ToolbarTimeWindowOption[];
   timeWindowGroupLabel?: string;
   unreadOnlyLabel?: string;
+  sortByTimeOnlyLabel?: string;
   filterLabel?: string;
   savedQueriesLabel?: string;
   savedQueryCount?: number;
@@ -44,6 +47,7 @@ export interface CustomToolbarProps {
   onOpenSavedQueries?: (anchor: HTMLElement) => void;
   onResetQuery?: () => void;
   onToggleUnreadOnly?: () => void;
+  onToggleSortByTimeOnly?: () => void;
   onSelectTimeWindowPreset?: (preset: AlarmTimeWindowPreset) => void;
   onSelectAllFiltered?: () => void;
   onClearSelection?: () => void;
@@ -104,10 +108,12 @@ export default function CustomToolbar({
   rowCount = 0,
   allFilteredSelected = false,
   unreadOnly = false,
+  sortByTimeOnly = false,
   timeWindowPreset,
   timeWindowOptions,
   timeWindowGroupLabel = "Alarm time window",
   unreadOnlyLabel = "Unread only",
+  sortByTimeOnlyLabel = "Newest first",
   filterLabel = "Filters",
   savedQueriesLabel = "Saved Queries",
   savedQueryCount = 0,
@@ -122,6 +128,7 @@ export default function CustomToolbar({
   onOpenSavedQueries,
   onResetQuery,
   onToggleUnreadOnly,
+  onToggleSortByTimeOnly,
   onSelectTimeWindowPreset,
   onSelectAllFiltered,
   onClearSelection,
@@ -182,20 +189,35 @@ export default function CustomToolbar({
           </Button>
         )}
         <GridToolbarDensitySelector />
-        {onToggleUnreadOnly && (
+        {(onToggleUnreadOnly || onToggleSortByTimeOnly) && (
           <>
             <Box component="span" role="separator" aria-orientation="vertical" sx={separatorSx} />
-            <Button
-              type="button"
-              size="small"
-              aria-pressed={Boolean(unreadOnly)}
-              startIcon={<MarkEmailUnreadOutlinedIcon fontSize="small" aria-hidden="true" />}
-              onClick={onToggleUnreadOnly}
-              data-testid="toolbar-unread-only"
-              sx={toggleButtonSx}
-            >
-              {unreadOnlyLabel}
-            </Button>
+            {onToggleUnreadOnly && (
+              <Button
+                type="button"
+                size="small"
+                aria-pressed={Boolean(unreadOnly)}
+                startIcon={<MarkEmailUnreadOutlinedIcon fontSize="small" aria-hidden="true" />}
+                onClick={onToggleUnreadOnly}
+                data-testid="toolbar-unread-only"
+                sx={toggleButtonSx}
+              >
+                {unreadOnlyLabel}
+              </Button>
+            )}
+            {onToggleSortByTimeOnly && (
+              <Button
+                type="button"
+                size="small"
+                aria-pressed={Boolean(sortByTimeOnly)}
+                startIcon={<ScheduleRoundedIcon fontSize="small" aria-hidden="true" />}
+                onClick={onToggleSortByTimeOnly}
+                data-testid="toolbar-sort-time-only"
+                sx={toggleButtonSx}
+              >
+                {sortByTimeOnlyLabel}
+              </Button>
+            )}
           </>
         )}
         {onSelectTimeWindowPreset && timeWindowOptions && timeWindowOptions.length > 0 && (

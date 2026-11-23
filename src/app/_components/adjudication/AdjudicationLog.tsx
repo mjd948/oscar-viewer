@@ -1,7 +1,14 @@
 "use client";
 
 import React, {useCallback, useContext, useEffect, useState} from "react";
+import dynamic from "next/dynamic";
 import AdjudicationData from "@/lib/data/oscar/adjudication/Adjudication";
+import {isCargoUffAttachmentPath} from "@/lib/data/oscar/CargoUffApi";
+
+const CargoUffViewerDialog = dynamic(
+    () => import("@/app/_components/uff/CargoUffViewerDialog"),
+    {ssr: false},
+);
 import {EventTableData} from "@/lib/data/oscar/TableHelpers";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {DataGrid, GridColDef} from "@mui/x-data-grid";
@@ -402,6 +409,7 @@ export default function AdjudicationLog(props: {
         text: ""
     });
     const [nodeEndpoint, setNodeEndpoint] = useState<string | null>(null);
+    const [openUffBucketKey, setOpenUffBucketKey] = useState<string | null>(null);
 
     const logColumns: GridColDef<AdjudicationData>[] = [
         {
@@ -510,7 +518,24 @@ export default function AdjudicationLog(props: {
 
                             <React.Fragment key={index}>
                                 {index > 0 && ', '}
-                                {nodeEndpoint ? (
+                                {isCargoUffAttachmentPath(path) ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setOpenUffBucketKey(path)}
+                                        data-testid={`adjudication-log-uff-link-${index}`}
+                                        style={{
+                                            color: '#1976d2',
+                                            textDecoration: 'underline',
+                                            background: 'none',
+                                            border: 'none',
+                                            padding: 0,
+                                            cursor: 'pointer',
+                                            font: 'inherit',
+                                        }}
+                                    >
+                                        {labels[index]}
+                                    </button>
+                                ) : nodeEndpoint ? (
                                     <a
                                         href={nodeEndpoint + path}
                                         target="_blank"
@@ -724,6 +749,15 @@ export default function AdjudicationLog(props: {
                     </Typography>
                 </DialogContent>
             </Dialog>
+            {openUffBucketKey && (
+                <CargoUffViewerDialog
+                    open={Boolean(openUffBucketKey)}
+                    onClose={() => setOpenUffBucketKey(null)}
+                    bucketKey={openUffBucketKey}
+                    node={props.node ?? null}
+                    occupancyObsId={props.event?.occupancyObsId ?? null}
+                />
+            )}
         </Stack>
     );
 }

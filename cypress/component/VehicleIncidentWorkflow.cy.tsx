@@ -834,7 +834,7 @@ describe("Consolidated Vehicle ID Search, Multi-Occupancy Comparison, Linked Adj
             .should("have.attr", "autocorrect", "off")
             .and("have.attr", "autocapitalize", "none")
             .and("have.attr", "spellcheck", "false")
-            .and("have.attr", "maxlength", "64");
+            .and("have.attr", "maxlength", "260");
 
         // 2) Verify IME composition Enter (keyCode 229) does NOT submit prematurely
         cy.get('[data-testid="vehicle-id-search-input"]').type("csqu 305438-3", {delay: 0});

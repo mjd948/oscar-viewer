@@ -32,6 +32,7 @@ import {
     sendCommand
 } from "@/lib/data/oscar/OSCARCommands";
 import {
+    buildNodeBucketBaseUrl,
     buildVehicleIncidentReportSpec,
     normalizeVehicleId,
     searchVehiclePassesAcrossNodes,
@@ -66,10 +67,14 @@ const EXTRACT_FORMAT_OPTIONS: ReadonlyArray<{ value: ReportOutputFormat; label: 
 ];
 
 const MAX_PREVIEW_ROWS = 100;
+const MAX_PREVIEW_COLUMNS = 9;
+const MAX_FEDERATED_REPORT_PASSES = 500;
 
 interface ExtractPreviewTable {
     headers: string[];
     rows: string[][];
+    totalRows: number;
+    totalCols?: number;
 }
 
 function detectReportFormatFromUrl(url: string | null | undefined): ReportOutputFormat {
@@ -86,11 +91,12 @@ function buildAttachmentDownloadUrl(url: string): string {
     return `${url}${separator}download=1`;
 }
 
-function parseRfc4180Csv(text: string, maxRows: number): string[][] {
+function parseRfc4180Csv(text: string, maxRows: number): { rows: string[][]; totalRows: number } {
     const rows: string[][] = [];
     let currentRow: string[] = [];
     let currentCell = "";
     let inQuotes = false;
+    let totalValidRows = 0;
 
     for (let i = 0; i < text.length; i++) {
         const ch = text[i];
@@ -117,9 +123,9 @@ function parseRfc4180Csv(text: string, maxRows: number): string[][] {
             currentRow.push(currentCell);
             currentCell = "";
             if (currentRow.length > 1 || currentRow[0] !== "") {
-                rows.push(currentRow);
-                if (rows.length >= maxRows + 1) {
-                    return rows;
+                totalValidRows += 1;
+                if (rows.length < maxRows + 1) {
+                    rows.push(currentRow);
                 }
             }
             currentRow = [];
@@ -131,16 +137,22 @@ function parseRfc4180Csv(text: string, maxRows: number): string[][] {
     if (currentCell.length > 0 || currentRow.length > 0) {
         currentRow.push(currentCell);
         if (currentRow.length > 1 || currentRow[0] !== "") {
-            rows.push(currentRow);
+            totalValidRows += 1;
+            if (rows.length < maxRows + 1) {
+                rows.push(currentRow);
+            }
         }
     }
-    return rows.slice(0, maxRows + 1);
+    return {
+        rows: rows.slice(0, maxRows + 1),
+        totalRows: Math.max(0, totalValidRows - 1),
+    };
 }
 
 function parseCsvPreview(text: string): ExtractPreviewTable {
-    const parsed = parseRfc4180Csv(text, MAX_PREVIEW_ROWS);
+    const { rows: parsed, totalRows } = parseRfc4180Csv(text, MAX_PREVIEW_ROWS);
     if (parsed.length === 0) {
-        return { headers: [], rows: [] };
+        return { headers: [], rows: [], totalRows: 0 };
     }
     const rawHeaders = parsed[0];
     const dataRows = parsed.slice(1);
@@ -163,6 +175,7 @@ function parseCsvPreview(text: string): ExtractPreviewTable {
     const passNumIdx = findIdx("Pass #");
     const alarmStatusIdx = findIdx("Alarm Status");
     if (passNumIdx >= 0 && alarmStatusIdx >= 0) {
+        const nodeNameIdx = findIdx("Node Name");
         const nodeIdx = findIdx("Node ID");
         const sysTypeIdx = findIdx("System Type");
         const startUtcIdx = findIdx("Start Time (UTC)");
@@ -183,18 +196,22 @@ function parseCsvPreview(text: string): ExtractPreviewTable {
                 "Isotopes",
                 "Disposition",
             ],
-            rows: dataRows.map((r, idx) => [
-                `#${r[passNumIdx] || idx + 1}`,
-                `${nodeIdx >= 0 && r[nodeIdx] ? `${r[nodeIdx]} · ` : ""}${r[laneIdx] || "Lane"}${sysTypeIdx >= 0 && r[sysTypeIdx] ? ` (${r[sysTypeIdx]})` : ""}`,
-                startUtcIdx >= 0 ? (r[startUtcIdx] ?? "") : "",
-                vehIdIdx >= 0 ? (r[vehIdIdx] ?? "") : "",
-                r[alarmStatusIdx] ?? "",
-                `${maxGammaIdx >= 0 ? (r[maxGammaIdx] ?? "0") : "0"} / ${maxNeutronIdx >= 0 ? (r[maxNeutronIdx] ?? "0") : "0"}`,
-                confIsoIdx >= 0 ? (r[confIsoIdx] ?? "") : "",
-                latestDispCodeIdx >= 0 && r[latestDispCodeIdx]
-                    ? `${r[latestDispCodeIdx]}: ${latestDispLblIdx >= 0 ? (r[latestDispLblIdx] ?? "") : ""}`
-                    : (latestDispLblIdx >= 0 ? (r[latestDispLblIdx] ?? "") : ""),
-            ]),
+            rows: dataRows.map((r, idx) => {
+                const csvNodeLabel = (nodeNameIdx >= 0 && r[nodeNameIdx]) ? r[nodeNameIdx] : (nodeIdx >= 0 ? r[nodeIdx] : "");
+                return [
+                    `#${r[passNumIdx] || idx + 1}`,
+                    `${csvNodeLabel ? `${csvNodeLabel} · ` : ""}${r[laneIdx] || "Lane"}${sysTypeIdx >= 0 && r[sysTypeIdx] ? ` (${r[sysTypeIdx]})` : ""}`,
+                    startUtcIdx >= 0 ? (r[startUtcIdx] ?? "") : "",
+                    vehIdIdx >= 0 ? (r[vehIdIdx] ?? "") : "",
+                    r[alarmStatusIdx] ?? "",
+                    `${maxGammaIdx >= 0 ? (r[maxGammaIdx] ?? "0") : "0"} / ${maxNeutronIdx >= 0 ? (r[maxNeutronIdx] ?? "0") : "0"}`,
+                    confIsoIdx >= 0 ? (r[confIsoIdx] ?? "") : "",
+                    latestDispCodeIdx >= 0 && r[latestDispCodeIdx]
+                        ? `${r[latestDispCodeIdx]}: ${latestDispLblIdx >= 0 ? (r[latestDispLblIdx] ?? "") : ""}`
+                        : (latestDispLblIdx >= 0 ? (r[latestDispLblIdx] ?? "") : ""),
+                ];
+            }),
+            totalRows,
         };
     }
 
@@ -210,13 +227,16 @@ function parseCsvPreview(text: string): ExtractPreviewTable {
                 occIdx >= 0 ? (r[occIdx] ?? "") : "",
                 summaryIdx >= 0 ? (r[summaryIdx] ?? "") : "",
             ]),
+            totalRows,
         };
     }
 
-    const colLimit = Math.min(rawHeaders.length, 9);
+    const colLimit = Math.min(rawHeaders.length, MAX_PREVIEW_COLUMNS);
     return {
         headers: rawHeaders.slice(0, colLimit),
         rows: dataRows.map((r) => r.slice(0, colLimit)),
+        totalRows,
+        totalCols: rawHeaders.length,
     };
 }
 
@@ -248,9 +268,14 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
                 const latestAdj = Array.isArray(pass?.adjudications) && pass.adjudications.length > 0
                     ? pass.adjudications[pass.adjudications.length - 1]
                     : null;
+                const nodeLabel = String(pass?.nodeName || pass?.nodeId || "").trim();
+                const rawLaneLabel = String(pass?.laneName || pass?.laneUid || "Lane").trim();
+                const displayNodeLane = nodeLabel && !rawLaneLabel.startsWith(`${nodeLabel} - `)
+                    ? `${nodeLabel} · ${rawLaneLabel}`
+                    : rawLaneLabel;
                 return [
                     `#${idx + 1}`,
-                    `${pass?.nodeId ? `${pass.nodeId} · ` : ""}${pass?.laneName || pass?.laneUid || "Lane"}${pass?.systemType ? ` (${pass.systemType})` : ""}`,
+                    `${displayNodeLane}${pass?.systemType ? ` (${pass.systemType})` : ""}`,
                     String(pass?.startTime ?? ""),
                     String(pass?.vehicleId ?? ""),
                     String(pass?.alarmStatusLabel ?? ""),
@@ -261,6 +286,7 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
                         : "Open / Unadjudicated",
                 ];
             }),
+            totalRows: passes.length,
         };
     }
 
@@ -274,6 +300,7 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
                 String(rec?.unit ?? ""),
                 String(rec?.details ?? ""),
             ]),
+            totalRows: records.length,
         };
     }
 
@@ -301,6 +328,7 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
                 String(rec?.alarmOccupancyRatePct ?? 0),
                 String(rec?.totalFaultsAndTamper ?? 0),
             ]),
+            totalRows: records.length,
         };
     }
 
@@ -316,6 +344,7 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
                 String(rec?.count ?? 0),
                 rec?.percentPct != null ? String(rec.percentPct) : "",
             ]),
+            totalRows: records.length,
         };
     }
 
@@ -331,6 +360,7 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
                     String(rec?.tamper ?? 0),
                     String(rec?.totalSohEvents ?? 0),
                 ]),
+                totalRows: records.length,
             };
         }
         if (eventType === "ALARMS" && (!first || first.totalOccupancies === undefined)) {
@@ -345,6 +375,7 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
                     String(rec?.totalAlarms ?? 0),
                     String(rec?.emlAlarmRatePct ?? 0),
                 ]),
+                totalRows: records.length,
             };
         }
         return {
@@ -370,6 +401,7 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
                 String(rec?.alarmOccupancyRatePct ?? 0),
                 String(rec?.emlAlarmRatePct ?? 0),
             ]),
+            totalRows: records.length,
         };
     }
 
@@ -386,6 +418,7 @@ function parseJsonPreview(text: string): ExtractPreviewTable {
             String(rec?.occupancyObsId || rec?.vehicleId || ""),
             String(rec?.summary || rec?.operatorNotes || "").replace(/\s+/g, " ").trim(),
         ]),
+        totalRows: records.length,
     };
 }
 
@@ -458,6 +491,7 @@ export default function ReportGeneratorView() {
     const [commandStatus, setCommandStatus] = useState<string | null>(null);
     const [extractPreview, setExtractPreview] = useState<ExtractPreviewTable | null>(null);
     const [upSetPreview, setUpSetPreview] = useState<UpSetCoOccurrencePayload | null>(null);
+    const [federatedPassesTruncated, setFederatedPassesTruncated] = useState(false);
 
     const activeTrackerCleanupRef = useRef<(() => void) | null>(null);
 
@@ -604,6 +638,7 @@ export default function ReportGeneratorView() {
             setGeneratedURL("");
             setExtractPreview(null);
             setUpSetPreview(null);
+            setFederatedPassesTruncated(false);
             setIsGenerating(true);
 
             let streams: typeof ControlStream[] = [];
@@ -644,6 +679,9 @@ export default function ReportGeneratorView() {
                             endTimeIso: endTime,
                         });
                         federatedPasses = serializeFederatedRemotePasses(remoteSearch.passes, nodeSnapshot.id);
+                        if (remoteSearch.truncated || remoteSearch.passes.length > MAX_FEDERATED_REPORT_PASSES) {
+                            setFederatedPassesTruncated(true);
+                        }
                     }
                 }
                 laneUIDArg = buildVehicleIncidentReportSpec({
@@ -669,8 +707,8 @@ export default function ReportGeneratorView() {
             );
 
             const buildBucketReportUrl = (reportPath: string) => {
-                const isTls = nodeSnapshot.isSecure ? "https://" : "http://";
-                return `${isTls}${nodeSnapshot.address}:${nodeSnapshot.port}${nodeSnapshot.oshPathRoot}/buckets/${reportPath}`;
+                const cleanPath = String(reportPath || "").replace(/^\/+/, "");
+                return `${buildNodeBucketBaseUrl(nodeSnapshot)}/${cleanPath}`;
             };
 
             if (response.status === 200) {
@@ -853,6 +891,7 @@ export default function ReportGeneratorView() {
         setGeneratedURL("");
         setExtractPreview(null);
         setUpSetPreview(null);
+        setFederatedPassesTruncated(false);
         setSelectedEvent(null);
         setSelectedReportType("");
         setSelectedReportFormat("PDF");
@@ -1270,8 +1309,51 @@ export default function ReportGeneratorView() {
                                 </Box>
                             ) : (
                                 <Stack spacing={2}>
+                                    {federatedPassesTruncated && (
+                                        <Alert
+                                            severity="info"
+                                            role="status"
+                                            data-testid="report-federated-truncated-notice"
+                                            sx={{ "& .MuiAlert-message": { textWrap: "pretty" } }}
+                                        >
+                                            {t("reportFederatedPassesTruncatedNotice", {
+                                                limit: MAX_FEDERATED_REPORT_PASSES,
+                                            })}
+                                        </Alert>
+                                    )}
                                     {upSetPreview && upSetPreview.totalOccupancies > 0 && (
                                         <UpSetPlot data={upSetPreview} testId="report-json-upset-plot" />
+                                    )}
+                                    {extractPreview && (
+                                        (extractPreview.totalRows > extractPreview.rows.length)
+                                        || (typeof extractPreview.totalCols === "number" && extractPreview.totalCols > extractPreview.headers.length)
+                                    ) && (
+                                        <Alert
+                                            severity="info"
+                                            role="status"
+                                            data-testid="report-preview-truncated-notice"
+                                            sx={{ "& .MuiAlert-message": { textWrap: "pretty" } }}
+                                        >
+                                            {(extractPreview.totalRows > extractPreview.rows.length)
+                                                && typeof extractPreview.totalCols === "number"
+                                                && extractPreview.totalCols > extractPreview.headers.length
+                                                ? t("reportPreviewRowsAndColsTruncatedNotice", {
+                                                    shown: extractPreview.rows.length,
+                                                    total: extractPreview.totalRows,
+                                                    shownCols: extractPreview.headers.length,
+                                                    totalCols: extractPreview.totalCols,
+                                                })
+                                                : (extractPreview.totalRows > extractPreview.rows.length)
+                                                    ? t("reportPreviewRowsTruncatedNotice", {
+                                                        shown: extractPreview.rows.length,
+                                                        total: extractPreview.totalRows,
+                                                    })
+                                                    : t("reportPreviewColsTruncatedNotice", {
+                                                        shownCols: extractPreview.headers.length,
+                                                        totalCols: extractPreview.totalCols ?? extractPreview.headers.length,
+                                                        total: extractPreview.totalRows,
+                                                    })}
+                                        </Alert>
                                     )}
                                     <Box
                                         tabIndex={0}

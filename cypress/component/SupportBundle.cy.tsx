@@ -1,7 +1,8 @@
 import React from "react";
 import {strFromU8, strToU8, unzipSync, zipSync} from "fflate";
-import {LanguageProvider} from "../../src/app/contexts/LanguageContext";
+import {LanguageProvider, useLanguage} from "../../src/app/contexts/LanguageContext";
 import HelpDialog from "../../src/app/_components/HelpDialog";
+import {getVideoGuideBySlug} from "../../src/lib/data/oscar/VideoGuidesCatalog";
 import {
     clearSupportDiagnosticEventsForTesting,
     getSupportDiagnosticEventsSnapshot,
@@ -204,38 +205,115 @@ describe("Troubleshooting Support Bundle diagnostics & HelpDialog export", () =>
             });
     });
 
-    it("surfaces route-aware contextual video guides, click-to-play WebVTT player, and 18-module offline catalog", () => {
+    it("surfaces route-aware contextual video guides, click-to-play WebVTT player, and 26-module offline catalog", () => {
         window.localStorage.setItem("language", "es");
+
+        let closeCount = 0;
+        const LanguageSwitchHarness = () => {
+            const {setLanguage} = useLanguage();
+            return (
+                <div>
+                    <button type="button" data-testid="nav-item-health">
+                        Estado de salud
+                    </button>
+                    <button type="button" data-testid="switch-lang-fr" onClick={() => setLanguage("fr")}>
+                        FR
+                    </button>
+                    <HelpDialog
+                        open
+                        onClose={() => {
+                            closeCount += 1;
+                        }}
+                        activePathname="/alarm-transfer/"
+                        skipBrowserDownload
+                    />
+                </div>
+            );
+        };
 
         cy.mount(
             <LanguageProvider>
-                <HelpDialog
-                    open
-                    onClose={() => {}}
-                    activePathname="/alarm-transfer/"
-                    skipBrowserDownload
-                />
+                <LanguageSwitchHarness />
             </LanguageProvider>,
         );
+
+        const guide14 = getVideoGuideBySlug("14-airgapped-alarm-qr-transfer");
+        expect(guide14?.durationLabel).to.equal("27s");
+
+        // Verify Console Pages cards display actual platform icons, localized symbol descriptions, and Highlight buttons
+        cy.get('[data-testid="help-page-symbol-note-health"]')
+            .should("be.visible")
+            .and("contain.text", "icono de monitor de pulso cardíaco")
+            .find('[data-platform-icon="health"]')
+            .should("exist");
+        cy.get('[data-testid="help-top-bar-tools-card"]').should("be.visible");
+        cy.get('[data-testid="help-highlight-page-health"]').should("be.visible").click();
+        cy.get('[data-testid="nav-item-health"]').should("have.attr", "data-oscar-coach-spotlight", "true");
+        cy.then(() => {
+            expect(closeCount).to.equal(1);
+        });
 
         cy.get('[data-testid="help-inline-video-player"]').should("not.exist");
         cy.get('[data-testid="help-contextual-guide-14"]')
             .should("be.visible")
             .and("have.attr", "aria-pressed", "false")
-            .and("contain.text", "Ver #14 (25.2s)")
+            .and("contain.text", `Ver #14 (${guide14!.durationLabel})`)
             .click();
 
         cy.get('[data-testid="help-contextual-guide-14"]').should("have.attr", "aria-pressed", "true");
-        cy.get('[data-testid="help-inline-video-player"]').should("be.visible");
+        cy.get('[data-testid="help-inline-video-player"]')
+            .should("be.visible")
+            .and("contain.text", "English, Español, Français, Ελληνικά");
         cy.get('[data-testid="help-video-element"]')
             .should("have.attr", "width", "1280")
             .and("have.attr", "height", "720")
             .and("have.attr", "preload", "metadata");
         cy.get('[data-testid="help-video-element"] source')
             .should("have.attr", "src", "/video-guides/videos/14-airgapped-alarm-qr-transfer.mp4");
-        cy.get('[data-testid="help-video-element"] track')
+        cy.get('[data-testid="help-video-element"] track').should("have.length", 4);
+        cy.get('[data-testid="help-video-element"] track[srclang="en"]')
             .should("have.attr", "kind", "captions")
-            .and("have.attr", "src", "/video-guides/captions/14-airgapped-alarm-qr-transfer.vtt");
+            .and("have.attr", "src", "/video-guides/captions/14-airgapped-alarm-qr-transfer.vtt")
+            .and("have.prop", "default", false);
+        cy.get('[data-testid="help-video-element"] track[srclang="es"]')
+            .should("have.attr", "kind", "captions")
+            .and("have.attr", "src", "/video-guides/captions/es/14-airgapped-alarm-qr-transfer.vtt")
+            .and("have.prop", "default", true);
+        cy.get('[data-testid="help-video-element"] track[srclang="fr"]')
+            .should("have.attr", "kind", "captions")
+            .and("have.attr", "src", "/video-guides/captions/fr/14-airgapped-alarm-qr-transfer.vtt")
+            .and("have.prop", "default", false);
+        cy.get('[data-testid="help-video-element"] track[srclang="el"]')
+            .should("have.attr", "kind", "captions")
+            .and("have.attr", "src", "/video-guides/captions/el/14-airgapped-alarm-qr-transfer.vtt")
+            .and("have.prop", "default", false);
+        cy.get('[data-testid="help-video-element"]').then(($video) => {
+            const videoEl = $video[0] as HTMLVideoElement;
+            const modesByLang: Record<string, string> = {};
+            for (let i = 0; i < videoEl.textTracks.length; i++) {
+                const tr = videoEl.textTracks[i]!;
+                modesByLang[tr.language] = tr.mode;
+            }
+            expect(modesByLang).to.deep.equal({
+                en: "disabled",
+                es: "showing",
+                fr: "disabled",
+                el: "disabled",
+            });
+        });
+
+        // Live language switch while video is open updates textTracks immediately
+        cy.get('[data-testid="switch-lang-fr"]').click({force: true});
+        cy.get('[data-testid="help-video-element"]').should(($video) => {
+            const videoEl = $video[0] as HTMLVideoElement;
+            const modesByLang: Record<string, string> = {};
+            for (let i = 0; i < videoEl.textTracks.length; i++) {
+                const tr = videoEl.textTracks[i]!;
+                modesByLang[tr.language] = tr.mode;
+            }
+            expect(modesByLang.fr).to.equal("showing");
+            expect(modesByLang.es).to.equal("disabled");
+        });
 
         cy.get('[data-testid="help-close-video-player"]').click();
         cy.get('[data-testid="help-inline-video-player"]').should("not.exist");
@@ -247,7 +325,7 @@ describe("Troubleshooting Support Bundle diagnostics & HelpDialog export", () =>
             expect(ariaLabel.startsWith(visible)).to.equal(true);
         });
 
-        cy.contains('[role="tab"]', "Manual y videoguías").click();
+        cy.contains('[role="tab"]', "Manuel et guides vidéo").click();
         cy.get('[data-testid="help-open-local-video-guides"]')
             .should("have.attr", "href", "/video-guides/index.html");
         cy.get('[data-testid="help-video-track-C"]').should("not.have.attr", "open");
@@ -256,5 +334,20 @@ describe("Troubleshooting Support Bundle diagnostics & HelpDialog export", () =>
         cy.get('[data-testid="help-catalog-watch-17"]').should("be.visible").click();
         cy.get('[data-testid="help-video-element"] source')
             .should("have.attr", "src", "/video-guides/videos/17-vehicle-ocr-and-adjudication.mp4");
+        cy.get('[data-testid="help-catalog-watch-19"]').should("be.visible").click();
+        cy.get('[data-testid="help-video-element"] source')
+            .should("have.attr", "src", "/video-guides/videos/19-viewer-users-passkeys-and-access.mp4");
+        cy.get('[data-testid="help-catalog-watch-20"]').should("be.visible").click();
+        cy.get('[data-testid="help-video-element"] source')
+            .should("have.attr", "src", "/video-guides/videos/20-multi-node-federation-vehicle-search-and-report.mp4");
+        cy.get('[data-testid="help-catalog-watch-24"]').should("be.visible").click();
+        cy.get('[data-testid="help-video-element"] source')
+            .should("have.attr", "src", "/video-guides/videos/24-continual-and-occasional-usb-backups.mp4");
+        cy.get('[data-testid="help-catalog-watch-25"]').should("be.visible").click();
+        cy.get('[data-testid="help-video-element"] source')
+            .should("have.attr", "src", "/video-guides/videos/25-pluggable-runtime-extensions-and-pmtiles.mp4");
+        cy.get('[data-testid="help-catalog-watch-27"]').should("be.visible").click();
+        cy.get('[data-testid="help-video-element"] source')
+            .should("have.attr", "src", "/video-guides/videos/27-cargo-uff-smb-and-xray-inspection.mp4");
     });
 });

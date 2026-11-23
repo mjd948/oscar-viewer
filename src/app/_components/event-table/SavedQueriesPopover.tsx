@@ -17,6 +17,7 @@ import {useLanguage} from "@/app/contexts/LanguageContext";
 import {
     EventLogQueryCriteria,
     MAX_BOOKMARK_NAME_LENGTH,
+    MAX_SAVED_EVENT_QUERIES,
     SavedEventQueryBookmark,
     summarizeEventLogQuery,
 } from "@/lib/data/oscar/SavedEventQueries";
@@ -82,7 +83,13 @@ export default function SavedQueriesPopover({
                 paper: {
                     "aria-labelledby": headingId,
                     "data-testid": "saved-queries-popover",
-                    sx: {p: 1.5, width: 340, maxWidth: "calc(100vw - 24px)"},
+                    sx: {
+                        p: 1.5,
+                        width: 340,
+                        maxWidth: "calc(100vw - 24px)",
+                        maxBlockSize: "min(520px, calc(100dvh - 32px))",
+                        overflowY: "auto",
+                    },
                 } as Record<string, unknown>,
             }}
         >
@@ -97,9 +104,22 @@ export default function SavedQueriesPopover({
 
             <Stack spacing={1.25}>
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                    <Typography id={headingId} variant="subtitle2" sx={{fontWeight: 700}}>
-                        {t("savedQueriesLabel")}
-                    </Typography>
+                    <Stack direction="row" spacing={0.75} alignItems="center">
+                        <Typography id={headingId} variant="subtitle2" sx={{fontWeight: 700}}>
+                            {t("savedQueriesLabel")}
+                        </Typography>
+                        <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            data-testid="saved-queries-count-badge"
+                            sx={{fontVariantNumeric: "tabular-nums"}}
+                        >
+                            {`(${t("savedQueriesCountBadge", {
+                                count: bookmarks.length,
+                                max: MAX_SAVED_EVENT_QUERIES,
+                            })})`}
+                        </Typography>
+                    </Stack>
                     <IconButton
                         type="button"
                         size="small"
@@ -109,6 +129,18 @@ export default function SavedQueriesPopover({
                         <CloseRoundedIcon fontSize="small" aria-hidden="true" />
                     </IconButton>
                 </Stack>
+
+                {hasActiveQuery && bookmarks.length >= MAX_SAVED_EVENT_QUERIES && (
+                    <Typography
+                        variant="caption"
+                        color="warning.main"
+                        role="status"
+                        data-testid="saved-queries-cap-note"
+                        sx={{textWrap: "pretty"}}
+                    >
+                        {t("savedQueriesLimitReplaceNotice", {max: MAX_SAVED_EVENT_QUERIES})}
+                    </Typography>
+                )}
 
                 {hasActiveQuery && (
                     <Box component="form" onSubmit={handleSaveSubmit} noValidate>

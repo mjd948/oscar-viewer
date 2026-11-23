@@ -8,6 +8,7 @@ import {
     isThresholdDataStream,
 } from "@/lib/data/oscar/Utilities";
 import {getGammaGrossCount, getNeutronGrossCount} from "@/app/utils/ChartUtils";
+import {isTrainingSandboxRuntimeActive, SANDBOX_WATERMARK_TEXT} from "@/lib/data/oscar/TrainingSandboxApi";
 
 export const ALARM_TRANSFER_SCHEMA = "org.oscar.alarm-transfer";
 export const ALARM_TRANSFER_VERSION = 1;
@@ -18,7 +19,7 @@ const BASE45_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
 const ALARM_QR_SEPARATOR = "/";
 const MAX_QR_COMPRESSED_BYTES = 4096;
 const MAX_DECOMPRESSED_BYTES = 128 * 1024;
-const MAX_OBSERVATIONS_PER_SERIES = 10_000;
+export const MAX_OBSERVATIONS_PER_SERIES = 10_000;
 
 export interface AlarmSeriesPoint {
     timestamp: number;
@@ -73,6 +74,8 @@ export interface AlarmTransferPayload {
         signed: false;
         notice: "integrity-only";
     };
+    sandboxMode?: true;
+    sandboxWatermark?: string;
 }
 
 export interface AlarmTransferDocument {
@@ -87,6 +90,7 @@ export interface AlarmTransferDocument {
 export interface AlarmTransferBuildResult extends AlarmTransferDocument {
     qrCharacters: number;
     qrFits: boolean;
+    seriesTruncated?: boolean;
 }
 
 interface SamplingBudget {
@@ -429,31 +433,41 @@ async function fetchSeries(
     event: EventTableData,
     streamPredicate: (stream: any) => boolean,
     valueReader: (result: any) => number | undefined,
-): Promise<AlarmSeriesPoint[]> {
+): Promise<{points: AlarmSeriesPoint[]; truncated: boolean}> {
     const stream = lane.datastreams.find(streamPredicate);
-    if (!stream) return [];
+    if (!stream) return {points: [], truncated: false};
 
     const query = await stream.searchObservations(
         new ObservationFilter({resultTime: `${event.startTime}/${event.endTime}`}),
         500,
     );
     const observations: any[] = [];
+    let truncated = false;
     while (query.hasNext() && observations.length < MAX_OBSERVATIONS_PER_SERIES) {
         const page = await query.nextPage();
+        if (page.length > MAX_OBSERVATIONS_PER_SERIES - observations.length) {
+            truncated = true;
+        }
         observations.push(...page.slice(0, MAX_OBSERVATIONS_PER_SERIES - observations.length));
+    }
+    if (observations.length >= MAX_OBSERVATIONS_PER_SERIES && query.hasNext()) {
+        truncated = true;
     }
 
     const start = new Date(event.startTime).getTime();
     const end = new Date(event.endTime).getTime();
     const fallbackStep = observations.length > 1 ? Math.max(1, (end - start) / (observations.length - 1)) : 0;
-    return normalizeSeries(observations.flatMap((observation, index) => {
-        const value = valueReader(observation?.result);
-        if (value === undefined) return [];
-        return [{
-            timestamp: timestampFromObservation(observation, start + index * fallbackStep),
-            value,
-        }];
-    }));
+    return {
+        points: normalizeSeries(observations.flatMap((observation, index) => {
+            const value = valueReader(observation?.result);
+            if (value === undefined) return [];
+            return [{
+                timestamp: timestampFromObservation(observation, start + index * fallbackStep),
+                value,
+            }];
+        })),
+        truncated,
+    };
 }
 
 function compactText(value: unknown, maximumLength: number): string | undefined {
@@ -493,11 +507,16 @@ function buildPayload(
     const adjudication = event.adjudicatedData;
     const node = lane.parentNode as any;
 
+    const sandboxActive = isTrainingSandboxRuntimeActive();
     return {
         schema: ALARM_TRANSFER_SCHEMA,
         version: ALARM_TRANSFER_VERSION,
         exportedAt: new Date().toISOString(),
         exportProfile: "qr-downsampled",
+        ...(sandboxActive ? {
+            sandboxMode: true as const,
+            sandboxWatermark: SANDBOX_WATERMARK_TEXT,
+        } : {}),
         source: {
             nodeId: String(node?.id ?? event.parentNode ?? "unknown"),
             nodeName: compactText(node?.name, 80),
@@ -544,11 +563,15 @@ export async function buildAlarmTransfer(
         || event.occupancyObsId.length > 128)
         throw new Error("The event UUID is unavailable or invalid. Refresh the event and try again.");
 
-    const [gamma, neutron, threshold] = await Promise.all([
+    const [gammaRes, neutronRes, thresholdRes] = await Promise.all([
         fetchSeries(lane, event, isGammaDataStream, getGammaGrossCount),
         fetchSeries(lane, event, isNeutronDataStream, getNeutronGrossCount),
         fetchSeries(lane, event, isThresholdDataStream, result => asFiniteNumber(result?.threshold)),
     ]);
+    const gamma = gammaRes.points;
+    const neutron = neutronRes.points;
+    const threshold = thresholdRes.points;
+    const seriesTruncated = gammaRes.truncated || neutronRes.truncated || thresholdRes.truncated;
     if (gamma.length === 0 && neutron.length === 0)
         throw new Error("No gamma or neutron observations are available for this alarm.");
 
@@ -559,11 +582,11 @@ export async function buildAlarmTransfer(
         const result = await encodeAlarmTransfer(payload);
         lastResult = result;
         if (result.transport.length <= MAX_ALARM_QR_CHARACTERS) {
-            return {...result, qrCharacters: result.transport.length, qrFits: true};
+            return {...result, qrCharacters: result.transport.length, qrFits: true, seriesTruncated};
         }
     }
     if (!lastResult) throw new Error("Alarm transfer could not be created.");
-    return {...lastResult, qrCharacters: lastResult.transport.length, qrFits: false};
+    return {...lastResult, qrCharacters: lastResult.transport.length, qrFits: false, seriesTruncated};
 }
 
 export function alarmTransferFileName(payload: AlarmTransferPayload): string {

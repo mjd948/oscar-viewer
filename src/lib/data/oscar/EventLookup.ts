@@ -5,7 +5,7 @@ import {isOccupancyDataStream} from "@/lib/data/oscar/Utilities";
 import {INode} from "@/lib/data/osh/Node";
 
 export const MAX_EVENT_OBSERVATION_ID_LENGTH = 128;
-export const EVENT_LOOKUP_REQUEST_TIMEOUT_MS = 8000;
+export const EVENT_LOOKUP_REQUEST_TIMEOUT_MS = 25000;
 
 const NOT_FOUND_HTTP_STATUSES = new Set([400, 404, 410]);
 

@@ -19,6 +19,19 @@ export default function GlobalError({
           digest: error.digest ?? null,
         },
       });
+      const msg = `${error.name ?? ""} ${error.message ?? ""}`;
+      if (/ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module/i.test(msg)) {
+        try {
+          const key = `oscar.chunkReload:${window.location.pathname}`;
+          const prev = Number(window.sessionStorage.getItem(key) ?? "0");
+          if (Date.now() - prev > 15_000) {
+            window.sessionStorage.setItem(key, String(Date.now()));
+            window.location.reload();
+          }
+        } catch {
+          // Ignore sessionStorage failures in restricted browser modes
+        }
+      }
     }
   }, [error]);
 

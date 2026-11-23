@@ -22,6 +22,16 @@ export const sortEventsByAlarmPriority = (left: Pick<EventTableData, "status" | 
     return new Date(right.startTime).getTime() - new Date(left.startTime).getTime(); // same status sort by time
 };
 
+export const sortEventsByTimeDesc = (
+    left: Pick<EventTableData, "startTime" | "endTime">,
+    right: Pick<EventTableData, "startTime" | "endTime">,
+): number => {
+    const startDiff = new Date(right.startTime).getTime() - new Date(left.startTime).getTime();
+    if (startDiff !== 0 && Number.isFinite(startDiff)) return startDiff;
+    const endDiff = new Date(right.endTime).getTime() - new Date(left.endTime).getTime();
+    return Number.isFinite(endDiff) ? endDiff : 0;
+};
+
 
 export class EventTableData implements IEventTableData {
     id: number;

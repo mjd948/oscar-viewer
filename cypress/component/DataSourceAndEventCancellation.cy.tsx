@@ -858,4 +858,181 @@ describe("DataSourceProvider lane-map deduplication and EventTable request cance
             ]);
         });
     });
+
+    it("prefetches adjacent page + 1 in background with zero count queries, reuses resolved or in-flight prefetch promises, and invalidates on mutation", () => {
+        const countCalls: Array<{url: string; priority?: string}> = [];
+        const rowCalls: Array<{filter: string; limit: number; offset: number; cutoff: string}> = [];
+        let holdPageTwoGate: (() => void) | null = null;
+        let holdPageTwo = false;
+
+        const bucketCountsByFilter: Record<string, number> = {
+            "gammaAlarm=true AND neutronAlarm=true": 5,
+            "gammaAlarm=false AND neutronAlarm=true": 12,
+            "gammaAlarm=true AND neutronAlarm=false": 100,
+        };
+
+        cy.window().then((win) => {
+            cy.stub(win, "fetch").callsFake((input: RequestInfo | URL, init?: RequestInit) => {
+                const url = String(input);
+                const priority = (init as {priority?: string} | undefined)?.priority;
+                if (url.includes("/observations/count?")) {
+                    countCalls.push({url, priority});
+                    const filterParam = new URL(url).searchParams.get("filter") ?? "";
+                    let count = 117;
+                    for (const [filterExpr, c] of Object.entries(bucketCountsByFilter)) {
+                        if (filterParam === filterExpr || filterParam.includes(filterExpr)) {
+                            count = c;
+                            break;
+                        }
+                    }
+                    return Promise.resolve(new Response(JSON.stringify({count}), {
+                        status: 200,
+                        headers: {"Content-Type": "application/json"},
+                    }));
+                }
+                return Promise.resolve(new Response("[]", {status: 200}));
+            });
+        });
+
+        const fakeNode: any = {
+            id: "node-prefetch",
+            name: "Local Node",
+            getConnectedSystemsEndpoint: () => "https://node.example/sensorhub/api",
+            getBasicAuthHeader: () => ({}),
+        };
+
+        function PrefetchPaginationHarness() {
+            const [page, setPage] = useState(0);
+            const queryPlans = useMemo<EventQueryPlan[]>(() => [{
+                key: "all-alarms",
+                node: fakeNode,
+                datastreamIds: ["occ-1"],
+                filter: "gammaAlarm=true OR neutronAlarm=true",
+            }], []);
+            const pageQueryPlans = useMemo<EventQueryPlan[]>(() => [
+                {...queryPlans[0], key: "p-gn", filter: "gammaAlarm=true AND neutronAlarm=true"},
+                {...queryPlans[0], key: "p-n", filter: "gammaAlarm=false AND neutronAlarm=true"},
+                {...queryPlans[0], key: "p-g", filter: "gammaAlarm=true AND neutronAlarm=false"},
+            ], [queryPlans]);
+
+            const fetchPlanRows = useCallback(async (
+                plan: EventQueryPlan,
+                limit: number,
+                offset: number,
+                cutoff = "2026-11-15T12:00:00.000Z",
+            ) => {
+                rowCalls.push({filter: plan.filter, limit, offset, cutoff});
+                if (holdPageTwo && plan.key === "p-g" && offset === 13 && limit === 15) {
+                    await new Promise<void>((resolve) => {
+                        holdPageTwoGate = resolve;
+                    });
+                }
+                const gammaAlarm = plan.key === "p-gn" || plan.key === "p-g";
+                const neutronAlarm = plan.key === "p-gn" || plan.key === "p-n";
+                return Array.from({length: limit}, (_, i) => {
+                    const globalSeq = offset + i;
+                    const ts = new Date(Date.parse(cutoff) - globalSeq * 1000).toISOString();
+                    return new EventTableData(
+                        globalSeq + 1,
+                        `${plan.key}-${globalSeq}`,
+                        {
+                            occupancyCount: globalSeq + 1,
+                            startTime: ts,
+                            endTime: ts,
+                            maxGamma: 100,
+                            maxNeutron: 1,
+                            gammaAlarm,
+                            neutronAlarm,
+                            adjudicatedIds: [],
+                        },
+                        `${plan.key}-obs-${globalSeq}`,
+                        "foi-1",
+                        "Local Node",
+                        false,
+                    );
+                });
+            }, []);
+
+            const {rows, loading, invalidatePrefetch} = useAbortableEventQueries({
+                queryPlans,
+                pageQueryPlans,
+                page,
+                pageSize: 15,
+                pageLoadedTime: "2026-11-15T12:00:00.000Z",
+                disjointPriorityPlans: true,
+                prewarmBucketCounts: true,
+                prefetchNextPage: true,
+                fetchPlanRows,
+            });
+
+            return (
+                <div>
+                    <span data-testid="pf-page">{String(page)}</span>
+                    <span data-testid="pf-loading">{String(loading)}</span>
+                    <span data-testid="pf-first-row">{rows[0]?.laneId ?? ""}</span>
+                    <span data-testid="pf-last-row">{rows[rows.length - 1]?.laneId ?? ""}</span>
+                    <button data-testid="pf-next" onClick={() => setPage((p) => p + 1)}>Next</button>
+                    <button data-testid="pf-invalidate" onClick={() => invalidatePrefetch()}>Invalidate</button>
+                </div>
+            );
+        }
+
+        cy.mount(<PrefetchPaginationHarness />);
+        cy.get('[data-testid="pf-first-row"]').should("have.text", "p-gn-0");
+
+        // Wait for Page 0 + bucket prewarm + automatic Page 1 background prefetch to settle
+        cy.wrap(null).should(() => {
+            expect(countCalls).to.have.length(4);
+            expect(rowCalls).to.have.length(5);
+        });
+
+        cy.then(() => {
+            // Prepare to hold Page 2 background prefetch halfway in-flight once Page 1 renders
+            holdPageTwo = true;
+            rowCalls.length = 0;
+        });
+
+        // Clicking Next to Page 1 reuses the resolved prefetch with ZERO count calls and ZERO Page-1 row fetches,
+        // and immediately kicks off the Page 2 (offset=13, limit=15) prefetch in the background!
+        cy.get('[data-testid="pf-next"]').click();
+        cy.get('[data-testid="pf-first-row"]').should("have.text", "p-n-10");
+        cy.get('[data-testid="pf-last-row"]').should("have.text", "p-g-12");
+        cy.wrap(null).should(() => {
+            expect(countCalls).to.have.length(4);
+            expect(rowCalls).to.deep.equal([
+                {
+                    filter: "gammaAlarm=true AND neutronAlarm=false",
+                    limit: 15,
+                    offset: 13,
+                    cutoff: "2026-11-15T12:00:00.000Z",
+                },
+            ]);
+            expect(holdPageTwoGate).to.not.equal(null);
+        });
+
+        // Clicking Next to Page 2 while Page 2's prefetch is still in-flight reuses that exact Promise (0 new calls)!
+        cy.get('[data-testid="pf-next"]').click();
+        cy.get('[data-testid="pf-loading"]').should("have.text", "true");
+        cy.then(() => {
+            expect(countCalls).to.have.length(4);
+            expect(rowCalls).to.have.length(1);
+            holdPageTwo = false;
+            holdPageTwoGate?.();
+        });
+        cy.get('[data-testid="pf-first-row"]').should("have.text", "p-g-13");
+        cy.get('[data-testid="pf-last-row"]').should("have.text", "p-g-27");
+        cy.get('[data-testid="pf-loading"]').should("have.text", "false");
+
+        // Wait for Page 3 background prefetch (offset=28, limit=15), then invalidate and verify it re-prefetches fresh
+        cy.wrap(null).should(() => {
+            expect(rowCalls).to.have.length(2);
+            expect(rowCalls[1].offset).to.equal(28);
+        });
+        cy.get('[data-testid="pf-invalidate"]').click();
+        cy.wrap(null).should(() => {
+            expect(countCalls).to.have.length(4);
+            expect(rowCalls).to.have.length(3);
+            expect(rowCalls[2].offset).to.equal(28);
+        });
+    });
 });

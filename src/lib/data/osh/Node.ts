@@ -26,6 +26,7 @@ import {
     OperationalViewCatalog,
     systemMatchesOperationalView,
 } from "@/lib/data/oscar/OperationalView";
+import {extractFederationServiceUser} from "@/lib/data/oscar/AuthSessionApi";
 
 const LANE_SYSTEM_UID_PREFIX = "urn:osh:system:lane:";
 
@@ -109,7 +110,7 @@ function getTerminalLaneId(laneUid: string): string | null {
         .filter(Boolean);
     return lanePath.length > 0 ? lanePath[lanePath.length - 1] : null;
 }
-export type NodeAuthenticationMode = "session" | "basic";
+export type NodeAuthenticationMode = "session" | "basic" | "bearer";
 
 export interface RealtimeObservationSource {
     subscribe(handler: (message: any) => void, eventTypes: string[]): void;
@@ -127,8 +128,11 @@ export interface INode {
     bucketsEndpoint: string,
     isSecure: boolean,
     authenticationMode: NodeAuthenticationMode,
-    auth: { username: string, password: string },
+    auth: { username: string, password: string, token?: string },
     isDefaultNode: boolean
+    customNameSet?: boolean;
+    serverNodeUid?: string;
+    serverNodeName?: string;
     laneAdjMap?: Map<string, string>,
     oscarServiceSystem: any;
     siteMapPath: string;
@@ -145,7 +149,9 @@ export interface INode {
 
     fetchLaneSystemsAndSubsystems(viewKey?: string | null): Promise<Map<string, LaneMapEntry>>,
 
-    fetchOperationalViewCatalog(): Promise<OperationalViewCatalog>,
+    fetchOperationalViewCatalog(forceRefresh?: boolean): Promise<OperationalViewCatalog>,
+
+    invalidateOperationalViewCatalog(): void,
 
     fetchLaneControlStreams(laneMap: Map<string, LaneMapEntry>): Promise<any>,
 
@@ -183,16 +189,23 @@ export interface INode {
 }
 
 export interface NodeOptions {
+    id?: string,
     name: string,
     address: string,
     port: number,
     oshPathRoot?: string,
     csAPIEndpoint?: string,
     bucketsEndpoint?: string,
-    auth?: { username: string, password: string } | null,
+    auth?: { username: string, password: string, token?: string } | null,
     authenticationMode?: NodeAuthenticationMode,
     isSecure?: boolean,
-    isDefaultNode?: boolean
+    isDefaultNode?: boolean,
+    customNameSet?: boolean,
+    serverNodeUid?: string,
+    serverNodeName?: string,
+    siteMapPath?: string,
+    lowerLeftBound?: LatLngExpression,
+    upperRightBound?: LatLngExpression,
     laneAdjMap?: Map<string, string>,
     oscarServiceSystem?: typeof System,
 }
@@ -208,8 +221,11 @@ export class Node implements INode {
     isSecure: boolean;
     authenticationMode: NodeAuthenticationMode;
     /** Runtime-only credentials. Persistence code must never serialize this field. */
-    auth: { username: string, password: string };
+    auth: { username: string, password: string, token?: string };
     isDefaultNode: boolean;
+    customNameSet?: boolean;
+    serverNodeUid?: string;
+    serverNodeName?: string;
     laneAdjMap: Map<string, string> = new Map<string, string>();
     siteMapPath: string;
     lowerLeftBound: LatLngExpression;
@@ -223,7 +239,7 @@ export class Node implements INode {
     operationalViewCatalogPromise: Promise<OperationalViewCatalog> | null = null;
 
     constructor(options: NodeOptions) {
-        this.id = "node-" + hashString(options.address + "-" + options.port); // TODO: maybe do something else here
+        this.id = options.id || ("node-" + hashString(options.address + "-" + options.port));
         this.name = options.name;
         this.address = options.address;
         this.port = options.port;
@@ -231,9 +247,20 @@ export class Node implements INode {
         this.csAPIEndpoint = options.csAPIEndpoint || '/api';
         this.bucketsEndpoint = options.bucketsEndpoint || '/buckets';
         this.authenticationMode = options.authenticationMode || "session";
-        this.auth = options.auth || {username: "", password: ""};
+        this.auth = options.auth ? {
+            username: options.auth.username || "",
+            password: options.auth.password || "",
+            token: options.auth.token || "",
+        } : {username: "", password: "", token: ""};
         this.isSecure = options.isSecure || false;
         this.isDefaultNode = options.isDefaultNode || false;
+        this.customNameSet = Boolean(options.customNameSet);
+        this.serverNodeUid = options.serverNodeUid;
+        this.serverNodeName = options.serverNodeName;
+        if (options.siteMapPath !== undefined) this.siteMapPath = options.siteMapPath;
+        if (options.lowerLeftBound !== undefined) this.lowerLeftBound = options.lowerLeftBound;
+        if (options.upperRightBound !== undefined) this.upperRightBound = options.upperRightBound;
+        if (options.oscarServiceSystem !== undefined) this.oscarServiceSystem = options.oscarServiceSystem;
 
 
         let mqttOpts: any = {
@@ -243,7 +270,15 @@ export class Node implements INode {
         }
 
         let connectorOpts: any = {};
-        if (this.authenticationMode === "basic" && this.hasRuntimeCredentials()) {
+        if (this.authenticationMode === "bearer" && this.auth.token && this.auth.token.trim().length > 0) {
+            const trimmedToken = this.auth.token.trim();
+            connectorOpts.Authorization = `Bearer ${trimmedToken}`;
+            const fedUser = extractFederationServiceUser(trimmedToken);
+            if (fedUser) {
+                mqttOpts.username = fedUser;
+                mqttOpts.password = trimmedToken;
+            }
+        } else if (this.authenticationMode === "basic" && this.hasRuntimeCredentials()) {
             mqttOpts.username = this.auth.username;
             mqttOpts.password = this.auth.password;
             connectorOpts.username = this.auth.username;
@@ -305,7 +340,14 @@ export class Node implements INode {
             prefix: this.csAPIEndpoint,
             endpointUrl: `${this.address}:${this.port}${this.oshPathRoot}`,
         };
-        if (this.authenticationMode === "basic" && this.hasRuntimeCredentials()) {
+        if (this.authenticationMode === "bearer" && this.auth.token && this.auth.token.trim().length > 0) {
+            const trimmedToken = this.auth.token.trim();
+            const fedUser = extractFederationServiceUser(trimmedToken);
+            if (fedUser) {
+                mqttOpts.username = fedUser;
+                mqttOpts.password = trimmedToken;
+            }
+        } else if (this.authenticationMode === "basic" && this.hasRuntimeCredentials()) {
             mqttOpts.username = this.auth.username;
             mqttOpts.password = this.auth.password;
         }
@@ -333,18 +375,21 @@ export class Node implements INode {
     }
 
     getBasicAuthHeader() {
-        if (!this.hasRuntimeCredentials())
+        if (this.auth.token && this.auth.token.trim().length > 0) {
+            return {"Authorization": `Bearer ${this.auth.token.trim()}`};
+        }
+        if (this.auth.username.length === 0 && this.auth.password.length === 0)
             return {};
         const encoded = btoa(`${this.auth.username}:${this.auth.password}`);
         return {"Authorization": `Basic ${encoded}`};
     }
 
     hasRuntimeCredentials() {
-        return this.auth.username.length > 0 || this.auth.password.length > 0;
+        return this.auth.username.length > 0 || this.auth.password.length > 0 || Boolean(this.auth.token && this.auth.token.trim().length > 0);
     }
 
     clearRuntimeCredentials() {
-        this.auth = {username: "", password: ""};
+        this.auth = {username: "", password: "", token: ""};
     }
 
     async checkForEndpoint() {
@@ -388,8 +433,7 @@ export class Node implements INode {
         if (viewKey !== null) {
             const laneSystems = systems.filter((system) =>
                 system?.properties?.properties?.uid?.startsWith(LANE_SYSTEM_UID_PREFIX));
-            await Promise.all(laneSystems.map((system) =>
-                this.loadOperationalViewKeywords(system)));
+            await this.loadOperationalViewKeywordsBounded(laneSystems);
         }
 
         systems.sort((a, b) => {
@@ -421,7 +465,19 @@ export class Node implements INode {
                 }
 
             } else if (system.properties.properties.uid.includes("urn:ornl:oscar:system:")) {
-                this.oscarServiceSystem = system;
+                const candidateValidStart = String(system.properties?.properties?.validTime?.[0] || "");
+                const existingValidStart = String((this.oscarServiceSystem as any)?.properties?.properties?.validTime?.[0] || "");
+                if (!this.oscarServiceSystem || candidateValidStart >= existingValidStart) {
+                    this.oscarServiceSystem = system;
+                    const serverUid = String(system.properties?.properties?.uid || "").trim();
+                    const rawServerName = String(system.properties?.properties?.name || "").trim();
+                    if (serverUid) {
+                        this.serverNodeUid = serverUid;
+                    }
+                    this.serverNodeName = (rawServerName && rawServerName !== "OSCAR System")
+                        ? rawServerName
+                        : undefined;
+                }
             } else {
                 const uid = system.properties.properties.uid;
                 const uidParts = uid.split(":");
@@ -467,7 +523,14 @@ export class Node implements INode {
         return laneMap;
     }
 
-    async fetchOperationalViewCatalog(): Promise<OperationalViewCatalog> {
+    invalidateOperationalViewCatalog(): void {
+        this.operationalViewCatalogPromise = null;
+    }
+
+    async fetchOperationalViewCatalog(forceRefresh = false): Promise<OperationalViewCatalog> {
+        if (forceRefresh) {
+            this.operationalViewCatalogPromise = null;
+        }
         if (this.operationalViewCatalogPromise)
             return this.operationalViewCatalogPromise;
 
@@ -478,8 +541,7 @@ export class Node implements INode {
 
             const laneSystems = systems.filter((system) =>
                 system?.properties?.properties?.uid?.startsWith(LANE_SYSTEM_UID_PREFIX));
-            await Promise.all(laneSystems.map((system) =>
-                this.loadOperationalViewKeywords(system)));
+            await this.loadOperationalViewKeywordsBounded(laneSystems);
             return buildOperationalViewCatalog(laneSystems);
         })();
 
@@ -490,6 +552,17 @@ export class Node implements INode {
             this.operationalViewCatalogPromise = null;
             throw error;
         }
+    }
+
+    private async loadOperationalViewKeywordsBounded(laneSystems: any[], concurrency = 8): Promise<void> {
+        let nextIndex = 0;
+        const workerCount = Math.max(1, Math.min(concurrency, laneSystems.length));
+        await Promise.all(Array.from({length: workerCount}, async () => {
+            while (nextIndex < laneSystems.length) {
+                const current = laneSystems[nextIndex++];
+                await this.loadOperationalViewKeywords(current);
+            }
+        }));
     }
 
     private async loadOperationalViewKeywords(system: any): Promise<void> {

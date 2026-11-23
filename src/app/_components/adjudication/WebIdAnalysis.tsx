@@ -3,8 +3,8 @@
 import React, {useCallback, useContext, useEffect, useState} from "react";
 import {EventTableData} from "@/lib/data/oscar/TableHelpers";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
-import {DataGrid, GridColDef} from "@mui/x-data-grid";
-import { Box, Dialog, DialogContent, DialogTitle, Stack, Typography } from "@mui/material";
+import { DataGrid, GridColDef } from "@mui/x-data-grid";
+import { Alert, Box, Dialog, DialogContent, DialogTitle, Stack, Typography } from "@mui/material";
 import {
     acquireSharedConnection,
     findRealtimeDataSourceForStream,
@@ -32,6 +32,7 @@ export default function WebIdAnalysis(props: {
 
     const [webIdLog, setWebIdLog] = useState<any[]>([]);
     const [filteredLog, setFilteredLog] = useState<any[]>([]);
+    const [webIdHistoryCapped, setWebIdHistoryCapped] = useState(false);
     const [expandDialog, setExpandDialog] = useState({ open: false, title: "", text: "" });
 
     const locale = getIntlLocale(language);
@@ -198,40 +199,74 @@ export default function WebIdAnalysis(props: {
             return;
         }
 
-        // Ask the server for this occupancy's results only. The unfiltered scan returns the
-        // stream oldest-first and stops after 25 pages, so on a node with more than 2,500
-        // WebID results every recent event's analysis was simply never read. Filtering by
-        // occupancy (rather than a time window around the event) also keeps results from a
-        // secondary-inspection upload made hours later.
-        const readPages = async (filter?: typeof ObservationFilter): Promise<WebIdAnalysisResult[]> => {
-            const results: WebIdAnalysisResult[] = [];
-            const query = await webIdDatastream.searchObservations(filter, 100);
+        const MAX_SCAN_PAGES = 25;
+        const PAGE_BATCH_SIZE = 100;
+        const readQueryPages = async (filter: typeof ObservationFilter | undefined, maxPages: number) => {
+            const items: WebIdAnalysisResult[] = [];
+            const query = await webIdDatastream.searchObservations(filter, PAGE_BATCH_SIZE);
             let pagesRead = 0;
-            while (query.hasNext() && pagesRead < 25) {
+            while (query.hasNext() && pagesRead < maxPages) {
                 pagesRead += 1;
                 const obsCollection = await query.nextPage();
-                for (const obs of obsCollection)
-                    results.push(new WebIdAnalysisResult(obs.resultTime, obs.result));
+                for (const obs of obsCollection) {
+                    items.push(new WebIdAnalysisResult(obs.resultTime, obs.result));
+                }
             }
-            return results;
+            const capped = pagesRead >= maxPages && Boolean(query.hasNext());
+            return { items, capped };
         };
 
+        const startMs = Date.parse(props.event?.startTime ?? "");
+        const endMs = Date.parse(props.event?.endTime ?? "");
         let accumulated: WebIdAnalysisResult[] = [];
+        let capped = false;
+
+        // Exact match first: ask the server for this occupancy's results only. The unfiltered scan
+        // returns the stream oldest-first and stops after 25 pages, so on a busy node recent
+        // events' analyses were never read; the occupancy filter also keeps a secondary-inspection
+        // upload made hours after the event.
         if (targetOccupancyObsId) {
             try {
-                accumulated = await readPages(new ObservationFilter({
+                const exact = await readQueryPages(new ObservationFilter({
                     filter: `occupancyObsId='${String(targetOccupancyObsId).replace(/'/g, "''")}'`,
-                }));
+                }), MAX_SCAN_PAGES);
+                accumulated = exact.items;
+                capped = exact.capped;
             } catch (error) {
-                console.warn("Filtered WebID query failed; falling back to a full scan", error);
+                console.warn("Filtered WebID query failed; falling back to a time window", error);
             }
         }
-        // Never worse than before: with no filtered match, scan the stream as ORNL did.
-        if (accumulated.length === 0)
-            accumulated = await readPages(undefined);
+
+        if (accumulated.length === 0 && Number.isFinite(startMs) && Number.isFinite(endMs)) {
+            try {
+                const windowStartIso = new Date(Math.max(0, Math.min(startMs, endMs) - 5 * 60_000)).toISOString();
+                const windowEndIso = new Date(Math.max(startMs, endMs) + 30 * 60_000).toISOString();
+                const scoped = await readQueryPages(
+                    new ObservationFilter({ resultTime: `${windowStartIso}/${windowEndIso}` }),
+                    MAX_SCAN_PAGES,
+                );
+                const hasTargetMatch = targetOccupancyObsId
+                    ? scoped.items.some((item) => item?.occupancyObsId == targetOccupancyObsId)
+                    : scoped.items.length > 0;
+                if (hasTargetMatch) {
+                    accumulated = scoped.items;
+                    capped = scoped.capped;
+                }
+            } catch {
+                // Fall back to lane-wide scan if the server rejects resultTime on this stream
+            }
+        }
+
+        if (accumulated.length === 0) {
+            const fallback = await readQueryPages(undefined, MAX_SCAN_PAGES);
+            accumulated = fallback.items;
+            capped = fallback.capped;
+        }
+
         accumulated.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+        setWebIdHistoryCapped(capped);
         setWebIdLog(accumulated);
-    }, [currentLane, laneMapRef, targetOccupancyObsId]);
+    }, [currentLane, laneMapRef, props.event?.endTime, props.event?.startTime, targetOccupancyObsId]);
 
     useEffect(() => {
         if (props.event && targetOccupancyObsId) {
@@ -312,6 +347,16 @@ export default function WebIdAnalysis(props: {
                 <Typography variant="h5">
                     {t('webIdAnalysisResults')}
                 </Typography>
+                {webIdHistoryCapped && (
+                    <Alert
+                        severity="info"
+                        role="status"
+                        data-testid="webid-history-cap-notice"
+                        sx={{ py: 0.25, "& .MuiAlert-message": { textWrap: "pretty" } }}
+                    >
+                        {t('webIdHistoryCapNotice', { max: (2500).toLocaleString(locale) })}
+                    </Alert>
+                )}
             </Stack>
             <Box sx={{ width: '100%' }}>
                 <DataGrid

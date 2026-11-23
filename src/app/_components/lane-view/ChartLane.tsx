@@ -1,6 +1,6 @@
 "use client";
 
-import {Grid, Stack, ToggleButton, ToggleButtonGroup} from "@mui/material";
+import {Grid, Stack, ToggleButton, ToggleButtonGroup, Typography} from "@mui/material";
 import ConSysApi from "osh-js/source/core/datasource/consysapi/ConSysApi.datasource";
 import React, {useEffect, useRef, useState} from "react";
 import ChartJsView from "osh-js/source/core/ui/view/chart/ChartJsView";
@@ -331,6 +331,16 @@ export default function ChartLane({laneName, datasources, setChartReady}: ChartI
     return (
         <Grid container spacing={2} alignItems="center">
             {renderChartsByMode()}
+            <Grid item xs={12}>
+                <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    data-testid="live-chart-window-note"
+                    sx={{display: "block", px: 1, textWrap: "pretty"}}
+                >
+                    {t('liveChartRollingWindowNotice', {max: LIVE_CHART_MAX_VALUES})}
+                </Typography>
+            </Grid>
         </Grid>
     );
 }

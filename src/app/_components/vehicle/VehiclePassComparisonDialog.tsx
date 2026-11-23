@@ -27,6 +27,8 @@ import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
 import ShowChartRoundedIcon from "@mui/icons-material/ShowChartRounded";
 import FactCheckRoundedIcon from "@mui/icons-material/FactCheckRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
+import LayersRoundedIcon from "@mui/icons-material/LayersRounded";
+import dynamic from "next/dynamic";
 import ControlStream from "osh-js/source/core/consysapi/controlstream/ControlStream";
 import {useRouter} from "next/navigation";
 
@@ -40,6 +42,9 @@ import UpSetPlot from "@/app/_components/common/UpSetPlot";
 import {
     buildUpSetCoOccurrenceFromVehiclePasses,
     computeVehiclePassUpSetMask,
+    isUpSetFilterValidForData,
+    matchesUpSetFilter,
+    UpSetFilterSelection,
 } from "@/lib/data/oscar/adjudication/IsotopeMapping";
 import {
     AdjudicationCode,
@@ -55,11 +60,13 @@ import {
 import {isAdjudicationControlStream} from "@/lib/data/oscar/Utilities";
 import {
     buildNodeBucketBaseUrl,
+    DEFAULT_VEHICLE_SEARCH_LIMIT_PER_NODE,
     FederatedVehicleSearchResult,
     hydrateVehiclePassProfiles,
     isPassAlarming,
     isPassOpenAlarm,
     isPassSpectroscopic,
+    MAX_HYDRATED_PROFILE_PASSES,
     normalizeVehicleId,
     searchVehiclePassesAcrossNodes,
     submitVehicleIncidentReport,
@@ -71,6 +78,16 @@ import {
     fetchRetainedMediaAsset,
 } from "@/lib/media/RetainedMedia";
 import {INode} from "@/lib/data/osh/Node";
+import {
+    fetchActiveCargoUffInfo,
+    searchCargoUff,
+    UffSearchMatch,
+} from "@/lib/data/oscar/CargoUffApi";
+
+const CargoUffViewerDialog = dynamic(
+    () => import("@/app/_components/uff/CargoUffViewerDialog"),
+    {ssr: false},
+);
 
 export interface VehiclePassComparisonDialogProps {
     open: boolean;
@@ -203,7 +220,50 @@ export default function VehiclePassComparisonDialog({
         format: ReportOutputFormat;
     } | null>(null);
     const [exportError, setExportError] = useState<string | null>(null);
-    const [selectedUpSetMask, setSelectedUpSetMask] = useState<number | null>(null);
+    const [selectedUpSetFilter, setSelectedUpSetFilter] = useState<UpSetFilterSelection | null>(null);
+    const [correlatedUffMatch, setCorrelatedUffMatch] = useState<UffSearchMatch | null>(null);
+    const [openUffViewer, setOpenUffViewer] = useState<boolean>(false);
+    const primaryComparisonNode = useMemo(
+        () => nodes?.[0] ?? Array.from(laneMap.values())[0]?.parentNode ?? null,
+        [laneMap, nodes],
+    );
+
+    useEffect(() => {
+        if (!open) {
+            setCorrelatedUffMatch(null);
+            setOpenUffViewer(false);
+            return;
+        }
+        if (initialResult && laneMap.size === 0 && (!nodes || nodes.length === 0)) {
+            return;
+        }
+        const normalized = normalizeVehicleId(vehicleId);
+        if (normalized.length < 3) {
+            setCorrelatedUffMatch(null);
+            return;
+        }
+        const ctrl = new AbortController();
+        void fetchActiveCargoUffInfo(primaryComparisonNode, fetchImpl)
+            .then(async info => {
+                if (!info.enabled || ctrl.signal.aborted) {
+                    setCorrelatedUffMatch(null);
+                    return;
+                }
+                const uffRes = await searchCargoUff(
+                    {vehicleId, windowMinutes: 0, fuzzy: true, limit: 3},
+                    primaryComparisonNode,
+                    ctrl.signal,
+                    fetchImpl,
+                );
+                if (!ctrl.signal.aborted) {
+                    setCorrelatedUffMatch(uffRes.matches?.[0] ?? null);
+                }
+            })
+            .catch(() => {
+                if (!ctrl.signal.aborted) setCorrelatedUffMatch(null);
+            });
+        return () => ctrl.abort();
+    }, [fetchImpl, initialResult, laneMap.size, nodes, open, primaryComparisonNode, vehicleId]);
 
     const runSearch = useCallback(
         async (includeProfiles: boolean, signal?: AbortSignal) => {
@@ -255,10 +315,10 @@ export default function VehiclePassComparisonDialog({
             setBatchStatus(null);
             setExportedReport(null);
             setExportError(null);
-            setSelectedUpSetMask(null);
+            setSelectedUpSetFilter(null);
             return;
         }
-        setSelectedUpSetMask(null);
+        setSelectedUpSetFilter(null);
 
         const normTarget = normalizeVehicleId(vehicleId);
         if (
@@ -291,7 +351,7 @@ export default function VehiclePassComparisonDialog({
         let active = true;
 
         void Promise.all(
-            result.passes.slice(0, 16).map(async (pass) => {
+            result.passes.slice(-MAX_HYDRATED_PROFILE_PASSES).map(async (pass) => {
                 const node = pass.node;
                 if (!node) return null;
 
@@ -384,11 +444,11 @@ export default function VehiclePassComparisonDialog({
     );
 
     useEffect(() => {
-        if (selectedUpSetMask === null || loading) return;
-        if (!vehicleUpSetData.intersections.some(col => col.mask === selectedUpSetMask)) {
-            setSelectedUpSetMask(null);
+        if (selectedUpSetFilter === null || loading) return;
+        if (!isUpSetFilterValidForData(vehicleUpSetData, selectedUpSetFilter)) {
+            setSelectedUpSetFilter(null);
         }
-    }, [loading, selectedUpSetMask, vehicleUpSetData]);
+    }, [loading, selectedUpSetFilter, vehicleUpSetData]);
 
     const displayedPassEntries = useMemo(
         () =>
@@ -396,10 +456,10 @@ export default function VehiclePassComparisonDialog({
                 .map((pass, idx) => ({pass, idx}))
                 .filter(
                     ({pass}) =>
-                        selectedUpSetMask === null
-                        || computeVehiclePassUpSetMask(pass) === selectedUpSetMask,
+                        selectedUpSetFilter === null
+                        || matchesUpSetFilter(computeVehiclePassUpSetMask(pass), selectedUpSetFilter),
                 ),
-        [passes, selectedUpSetMask],
+        [passes, selectedUpSetFilter],
     );
 
     const openAlarmPasses = useMemo(
@@ -657,6 +717,19 @@ export default function VehiclePassComparisonDialog({
                     </Box>
                 </Stack>
                 <Stack direction="row" spacing={0.5} alignItems="center">
+                    {correlatedUffMatch && (
+                        <Button
+                            type="button"
+                            size="small"
+                            variant="contained"
+                            color="primary"
+                            startIcon={<LayersRoundedIcon />}
+                            onClick={() => setOpenUffViewer(true)}
+                            data-testid="vehicle-comparison-open-uff-btn"
+                        >
+                            {t("openCargoXray")}
+                        </Button>
+                    )}
                     <Button
                         type="button"
                         size="small"
@@ -760,6 +833,20 @@ export default function VehiclePassComparisonDialog({
                         </Box>
                     )}
 
+                    {!loading && result?.truncated && (
+                        <Alert
+                            severity="info"
+                            role="status"
+                            data-testid="vehicle-comparison-truncated-notice"
+                            sx={{"& .MuiAlert-message": {textWrap: "pretty"}}}
+                        >
+                            {t("vehicleSearchTruncatedNotice", {
+                                limit: (result.limitPerNode ?? DEFAULT_VEHICLE_SEARCH_LIMIT_PER_NODE).toLocaleString(locale),
+                                shown: passes.length.toLocaleString(locale),
+                            })}
+                        </Alert>
+                    )}
+
                     {/* Loading indicator */}
                     {loading && (
                         <Stack direction="row" spacing={1.5} alignItems="center" justifyContent="center" py={3}>
@@ -775,8 +862,8 @@ export default function VehiclePassComparisonDialog({
                         <UpSetPlot
                             data={vehicleUpSetData}
                             title={t("vehicleHistoryUpSetTitle")}
-                            selectedMask={selectedUpSetMask}
-                            onSelectIntersection={col => setSelectedUpSetMask(col?.mask ?? null)}
+                            selectedFilter={selectedUpSetFilter}
+                            onSelectFilter={setSelectedUpSetFilter}
                             testId="vehicle-history-upset-plot"
                         />
                     )}
@@ -1099,9 +1186,22 @@ export default function VehiclePassComparisonDialog({
                     {/* Visual Continuity Filmstrip (OCR Crops & Retained Keyframes) */}
                     {Object.keys(thumbnailsByKey).length > 0 && (
                         <Box data-testid="vehicle-visual-filmstrip">
-                            <Typography variant="subtitle2" sx={{mb: 1, fontWeight: 700}}>
+                            <Typography variant="subtitle2" sx={{mb: passes.length > MAX_HYDRATED_PROFILE_PASSES ? 0.25 : 1, fontWeight: 700}}>
                                 {t("vehicleVisualContinuityTitle")}
                             </Typography>
+                            {passes.length > MAX_HYDRATED_PROFILE_PASSES && (
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    data-testid="vehicle-filmstrip-truncated-note"
+                                    sx={{display: "block", mb: 1, textWrap: "pretty"}}
+                                >
+                                    {t("vehicleRecentSubsetNotice", {
+                                        max: MAX_HYDRATED_PROFILE_PASSES,
+                                        total: passes.length.toLocaleString(locale),
+                                    })}
+                                </Typography>
+                            )}
                             <Stack
                                 direction="row"
                                 spacing={1.5}
@@ -1160,6 +1260,19 @@ export default function VehiclePassComparisonDialog({
                                     <Typography variant="caption" color="text.secondary">
                                         {t("vehicleProfileComparisonSubtitle")}
                                     </Typography>
+                                    {passes.length > MAX_HYDRATED_PROFILE_PASSES && (
+                                        <Typography
+                                            variant="caption"
+                                            color="text.secondary"
+                                            data-testid="vehicle-profile-truncated-note"
+                                            sx={{display: "block", textWrap: "pretty"}}
+                                        >
+                                            {t("vehicleRecentSubsetNotice", {
+                                                max: MAX_HYDRATED_PROFILE_PASSES,
+                                                total: passes.length.toLocaleString(locale),
+                                            })}
+                                        </Typography>
+                                    )}
                                 </Box>
                                 {!profilesLoaded && (
                                     <Button
@@ -1560,6 +1673,16 @@ export default function VehiclePassComparisonDialog({
                     {t("close")}
                 </Button>
             </DialogActions>
+            {openUffViewer && correlatedUffMatch && (
+                <CargoUffViewerDialog
+                    open={openUffViewer}
+                    onClose={() => setOpenUffViewer(false)}
+                    uffUuid={correlatedUffMatch.uffUuid}
+                    node={primaryComparisonNode}
+                    occupancyObsId={result?.passes?.[0]?.occupancyObsId ?? null}
+                    initialRadiationProfile={result?.passes?.[0]?.radiationProfile ?? null}
+                />
+            )}
         </Dialog>
     );
 }

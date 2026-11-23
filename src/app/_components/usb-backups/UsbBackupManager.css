@@ -1,0 +1,151 @@
+/* Native <dialog>, <progress>, fieldset radio group, and copy-status styles */
+
+dialog.usb-native-dialog {
+    padding: 0;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 12px;
+    max-width: min(34rem, calc(100vw - 2rem));
+    width: 100%;
+    color: inherit;
+    background-color: var(--mui-palette-background-paper, #ffffff);
+    box-shadow: 0 24px 48px rgba(15, 23, 42, 0.28);
+}
+
+dialog.usb-native-dialog[open] {
+    display: grid;
+    gap: 0;
+}
+
+dialog.usb-native-dialog:modal {
+    overscroll-behavior: contain;
+}
+
+dialog.usb-native-dialog::backdrop {
+    overflow: hidden;
+    overscroll-behavior: contain;
+    background: rgba(15, 23, 42, 0.58);
+}
+
+@media (prefers-color-scheme: dark) {
+    dialog.usb-native-dialog {
+        background-color: var(--mui-palette-background-paper, #1e293b);
+        color: #f8fafc;
+    }
+}
+
+progress.usb-native-progress {
+    --usb-progress-track: rgba(25, 118, 210, 0.16);
+    --usb-progress-fill: #1976d2;
+    appearance: none;
+    border: 0 solid;
+    inline-size: 100%;
+    block-size: 0.65rem;
+    border-radius: 999px;
+    overflow: clip;
+    background: var(--usb-progress-track);
+    container-type: inline-size;
+    display: block;
+}
+
+progress.usb-native-progress::-webkit-progress-bar {
+    background: transparent;
+}
+
+progress.usb-native-progress::-webkit-progress-value {
+    background: var(--usb-progress-fill);
+    border-radius: inherit;
+    transition: inline-size 180ms ease-out;
+}
+
+progress.usb-native-progress::-moz-progress-bar {
+    background: var(--usb-progress-fill);
+    border-radius: inherit;
+}
+
+progress.usb-native-progress:indeterminate::-webkit-progress-value {
+    inline-size: 42%;
+    margin-right: auto;
+    animation: usb-progress-slide 1.5s ease-in-out infinite;
+}
+
+progress.usb-native-progress:indeterminate::-moz-progress-bar {
+    inline-size: 42%;
+    margin-right: auto;
+    animation: usb-progress-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes usb-progress-slide {
+    from {
+        translate: -100% 0;
+    }
+    to {
+        translate: 100cqi 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    progress.usb-native-progress::-webkit-progress-value {
+        transition: none;
+    }
+    progress.usb-native-progress:indeterminate::-webkit-progress-value {
+        animation-duration: 10s;
+    }
+    progress.usb-native-progress:indeterminate::-moz-progress-bar {
+        animation-duration: 10s;
+    }
+}
+
+.usb-copy-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.usb-copy-status {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #2e7d32;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 150ms ease-in-out;
+}
+
+.usb-copy-status[data-visible="true"] {
+    opacity: 1;
+}
+
+fieldset.usb-mode-fieldset {
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    margin: 0;
+}
+
+fieldset.usb-mode-fieldset > legend {
+    padding: 0 0.45rem;
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+
+label.usb-radio-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+label.usb-radio-card:has(input[type="radio"]:checked) {
+    border-color: #1976d2;
+    background-color: rgba(25, 118, 210, 0.06);
+}
+
+label.usb-radio-card input[type="radio"] {
+    margin-top: 0.22rem;
+    inline-size: 1.05rem;
+    block-size: 1.05rem;
+    accent-color: #1976d2;
+    flex-shrink: 0;
+}

@@ -16,13 +16,17 @@ import eventDataReducer from "../../src/lib/state/EventDataSlice";
 import oscarClientReducer from "../../src/lib/state/OSCARClientSlice";
 import eventPreviewReducer from "../../src/lib/state/EventPreviewSlice";
 import {
+    buildDisplayedUpSetColumns,
     buildUpSetCoOccurrenceFromEvents,
     mapNuclideToCanonicalIsotope,
+    matchesUpSetFilter,
+    orderUpSetSetsPopulatedFirst,
     parseN42AlarmReportNuclides,
     selectDeviceReportIsotopes,
     selectHighestConfidenceWebIdResult,
     suggestAdjudicationCodeForCategory,
     UpSetCoOccurrencePayload,
+    UpSetFilterSelection,
 } from "../../src/lib/data/oscar/adjudication/IsotopeMapping";
 
 function InteractiveUpSetHarness({data}: {data: UpSetCoOccurrencePayload}) {
@@ -416,5 +420,131 @@ describe("Spectroscopic Isotope Mapping & UpSet Co-Occurrence Plotting", () => {
         cy.contains('[data-testid="event-log-upset-plot"] button', "SNM").click();
         cy.contains(".MuiDataGrid-row", "1010").should("exist");
         cy.contains(".MuiDataGrid-row", "1030").should("not.exist");
+    });
+
+    it("lists populated categories first, enables main category filters when populated, and rolls rare SNM combinations into Other SNM summing to 38", () => {
+        window.localStorage.setItem("language", "en");
+
+        // 1. Verify populated categories always appear before zero-count categories
+        const sparseSets = orderUpSetSetsPopulatedFirst([
+            {name: "NORM", count: 0, snm: false},
+            {name: "Unknown", count: 0, snm: false},
+            {name: "SNM", count: 3, snm: true},
+            {name: "Gamma", count: 12, snm: false},
+            {name: "Industrial", count: 0, snm: false},
+            {name: "Medical", count: 0, snm: false},
+            {name: "Neutron", count: 3, snm: false},
+        ]);
+        expect(sparseSets.slice(0, 3).map(s => s.name)).to.deep.equal(["Gamma", "SNM", "Neutron"]);
+        expect(sparseSets.slice(3).every(s => s.count === 0)).to.equal(true);
+
+        // 2. Build 23-combination payload reproducing 38 SNM (10 at Rank #18 + 28 across rare tail combinations)
+        const rollupPayload: UpSetCoOccurrencePayload = {
+            totalOccupancies: 85339,
+            sets: [
+                {name: "Gamma", count: 71694, snm: false},
+                {name: "Unknown", count: 61937, snm: false},
+                {name: "Neutron", count: 8028, snm: false},
+                {name: "NORM", count: 4640, snm: false},
+                {name: "Industrial", count: 1882, snm: false},
+                {name: "SNM", count: 38, snm: true},
+                {name: "Medical", count: 0, snm: false}, // zero-count category to verify last + disabled
+            ],
+            intersections: [
+                {label: "Gamma + Unknown", sets: ["Gamma", "Unknown"], count: 48868, snmPresent: false},
+                {label: "Gamma", sets: ["Gamma"], count: 17367, snmPresent: false},
+                {label: "Neutron + Unknown", sets: ["Neutron", "Unknown"], count: 6480, snmPresent: false},
+                {label: "Unknown", sets: ["Unknown"], count: 5365, snmPresent: false},
+                {label: "Gamma + NORM", sets: ["Gamma", "NORM"], count: 3706, snmPresent: false},
+                {label: "Gamma + Industrial", sets: ["Gamma", "Industrial"], count: 956, snmPresent: false},
+                {label: "Industrial + Unknown", sets: ["Industrial", "Unknown"], count: 819, snmPresent: false},
+                {label: "NORM + Neutron", sets: ["NORM", "Neutron"], count: 800, snmPresent: false},
+                {label: "Gamma + Neutron + Unknown", sets: ["Gamma", "Neutron", "Unknown"], count: 327, snmPresent: false},
+                {label: "Gamma + Neutron", sets: ["Gamma", "Neutron"], count: 198, snmPresent: false},
+                {label: "Industrial + Neutron", sets: ["Industrial", "Neutron"], count: 145, snmPresent: false},
+                {label: "Gamma + Industrial + Unknown", sets: ["Gamma", "Industrial", "Unknown"], count: 79, snmPresent: false},
+                {label: "Gamma + NORM + Unknown", sets: ["Gamma", "NORM", "Unknown"], count: 72, snmPresent: false},
+                {label: "Gamma + Industrial + NORM", sets: ["Gamma", "Industrial", "NORM"], count: 59, snmPresent: false},
+                {label: "Industrial + NORM + Neutron", sets: ["Industrial", "NORM", "Neutron"], count: 24, snmPresent: false},
+                {label: "Gamma + Industrial + NORM + Neutron", sets: ["Gamma", "Industrial", "NORM", "Neutron"], count: 24, snmPresent: false},
+                {label: "Gamma + Industrial + Neutron", sets: ["Gamma", "Industrial", "Neutron"], count: 12, snmPresent: false},
+                {label: "SNM + Neutron", sets: ["SNM", "Neutron"], count: 10, snmPresent: true},
+                // Rare SNM tail combinations (sum = 28, so 10 + 28 = 38 total SNM)
+                {label: "Gamma + SNM", sets: ["Gamma", "SNM"], count: 9, snmPresent: true},
+                {label: "Gamma + SNM + Neutron", sets: ["Gamma", "SNM", "Neutron"], count: 8, snmPresent: true},
+                {label: "Gamma + Unknown + SNM", sets: ["Gamma", "Unknown", "SNM"], count: 6, snmPresent: true},
+                {label: "Gamma + NORM + SNM", sets: ["Gamma", "NORM", "SNM"], count: 3, snmPresent: true},
+                {label: "SNM", sets: ["SNM"], count: 2, snmPresent: true},
+            ],
+        };
+
+        const displayedCols = buildDisplayedUpSetColumns(rollupPayload.intersections, 18, "Other SNM");
+        expect(displayedCols).to.have.length(18);
+        const snmVerticalSum = displayedCols
+            .filter(c => c.snmPresent)
+            .reduce((acc, c) => acc + c.count, 0);
+        expect(snmVerticalSum).to.equal(38);
+
+        function FilterHarness() {
+            const [sel, setSel] = useState<UpSetFilterSelection | null>(null);
+            return (
+                <LanguageProvider>
+                    <div>
+                        <div data-testid="active-filter-summary">
+                            {sel ? `${sel.kind}:${sel.label}:${sel.count}` : "none"}
+                        </div>
+                        <UpSetPlot
+                            data={rollupPayload}
+                            maxIntersections={18}
+                            selectedFilter={sel}
+                            onSelectFilter={setSel}
+                            testId="rollup-upset-plot"
+                        />
+                    </div>
+                </LanguageProvider>
+            );
+        }
+
+        cy.mount(<FilterHarness />);
+
+        // Populated categories listed first; zero-count Medical listed last and disabled
+        cy.get('[data-testid="upset-category-filter-group"] button').first()
+            .should("contain.text", "Gamma (71,694)")
+            .and("not.be.disabled");
+        cy.get('[data-testid="upset-category-filter-group"] button').last()
+            .should("contain.text", "Medical (0)")
+            .and("be.disabled");
+
+        // Clicking main SNM category selects all 38 SNM occupancies
+        cy.get('[data-testid="upset-cat-btn-SNM"]').click();
+        cy.get('[data-testid="active-filter-summary"]').should("have.text", "category:SNM:38");
+
+        // Clicking Other SNM rollup column button selects the 28 rolled-up rare SNM occupancies
+        cy.get('[data-testid="upset-col-btn-Other-SNM"]')
+            .should("contain.text", "Other SNM (28)")
+            .click();
+        cy.get('[data-testid="active-filter-summary"]').should("have.text", "otherSnm:Other SNM:28");
+        cy.get('[data-testid="upset-col-Other-SNM"][data-other-snm="true"]').should("exist");
+
+        // Verify bitmask matcher semantics for category vs otherSnm
+        const snmNeutMask = (1 << 5) | (1 << 6);
+        const gammaSnmMask = (1 << 0) | (1 << 5);
+        const otherCol = displayedCols[displayedCols.length - 1];
+        expect(matchesUpSetFilter(snmNeutMask, {
+            kind: "otherSnm",
+            masks: otherCol.rolledUpMasks,
+            excludedMasks: otherCol.excludedSnmMasks,
+            label: "Other SNM",
+            count: 28,
+            snmPresent: true,
+        })).to.equal(false);
+        expect(matchesUpSetFilter(gammaSnmMask, {
+            kind: "otherSnm",
+            masks: otherCol.rolledUpMasks,
+            excludedMasks: otherCol.excludedSnmMasks,
+            label: "Other SNM",
+            count: 28,
+            snmPresent: true,
+        })).to.equal(true);
     });
 });

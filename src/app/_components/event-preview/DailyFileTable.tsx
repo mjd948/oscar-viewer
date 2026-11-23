@@ -10,7 +10,7 @@ import {
     mergeDailyFileItems,
     shouldFetchDailyFileSlice,
 } from "@/lib/data/oscar/DailyFileSlice";
-import {Box, Stack, Typography} from "@mui/material";
+import {Alert, Box, Stack, Typography} from "@mui/material";
 import React, {useContext, useEffect, useState} from "react";
 import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
 import {
@@ -21,11 +21,14 @@ import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {Download} from "@mui/icons-material";
 import IconButton from "@mui/material/IconButton";
 import {useLanguage} from "@/app/contexts/LanguageContext";
+import {getIntlLocale} from "@/app/utils/LocaleUtils";
 
 
 export default function DailyFileTable(props: { event: EventTableData; fetchImpl?: DailyFileSliceFetch }) {
-    const {t} = useLanguage();
+    const {language, t} = useLanguage();
+    const locale = getIntlLocale(language);
     const [logs, setLogs] = useState<string[]>([]);
+    const [isTruncated, setIsTruncated] = useState(false);
 
     const laneMapRef = useContext(DataSourceContext).laneMapRef;
 
@@ -38,8 +41,10 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
             const currLaneEntry: LaneMapEntry | undefined = laneMapRef.current.get(currentLane);
             if (!currLaneEntry) {
                 console.warn("Cannot load daily file: lane entry is unavailable:", currentLane);
-                if (!signal.aborted)
+                if (!signal.aborted) {
                     setLogs([]);
+                    setIsTruncated(false);
+                }
                 return;
             }
 
@@ -47,6 +52,7 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
                 (ds) => isDailyFileDataStream(ds),
             );
             const hotItems: DailyFileMessageItem[] = [];
+            let hotTruncated = false;
 
             if (datastream) {
                 try {
@@ -56,6 +62,10 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
                     }), DEFAULT_DAILY_FILE_SLICE_LIMIT);
 
                     while (!signal.aborted && observations.hasNext()) {
+                        if (hotItems.length >= DEFAULT_DAILY_FILE_SLICE_LIMIT) {
+                            hotTruncated = true;
+                            break;
+                        }
                         const page = await observations.nextPage();
                         if (signal.aborted)
                             return;
@@ -75,6 +85,9 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
                             }
                         }
                     }
+                    if (hotItems.length > DEFAULT_DAILY_FILE_SLICE_LIMIT) {
+                        hotTruncated = true;
+                    }
                 } catch (error) {
                     if (signal.aborted)
                         return;
@@ -82,8 +95,10 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
                 }
             } else if (!currLaneEntry.parentNode) {
                 console.warn("No daily file datastream found for this lane");
-                if (!signal.aborted)
+                if (!signal.aborted) {
                     setLogs([]);
+                    setIsTruncated(false);
+                }
                 return;
             }
 
@@ -91,6 +106,7 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
                 return;
 
             let sliceItems: DailyFileMessageItem[] = [];
+            let sliceTruncated = false;
             if (currLaneEntry.parentNode && shouldFetchDailyFileSlice(hotItems, props.event.startTime)) {
                 const laneUid = currLaneEntry.laneSystem?.properties?.properties?.uid
                     ?? currLaneEntry.laneSystem?.properties?.uid;
@@ -106,6 +122,7 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
                     if (signal.aborted)
                         return;
                     sliceItems = sliceResponse?.items ?? [];
+                    sliceTruncated = Boolean(sliceResponse?.truncated);
                 } catch (error) {
                     if (signal.aborted)
                         return;
@@ -114,7 +131,17 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
             }
 
             if (!signal.aborted) {
-                setLogs(mergeDailyFileItems(hotItems, sliceItems, DEFAULT_DAILY_FILE_SLICE_LIMIT));
+                const unboundedMerged = mergeDailyFileItems(
+                    hotItems,
+                    sliceItems,
+                    DEFAULT_DAILY_FILE_SLICE_LIMIT + 1,
+                );
+                setIsTruncated(
+                    hotTruncated
+                    || sliceTruncated
+                    || unboundedMerged.length > DEFAULT_DAILY_FILE_SLICE_LIMIT,
+                );
+                setLogs(unboundedMerged.slice(0, DEFAULT_DAILY_FILE_SLICE_LIMIT));
             }
         };
 
@@ -159,6 +186,18 @@ export default function DailyFileTable(props: { event: EventTableData; fetchImpl
                     <Download />
                 </IconButton>
             </Stack>
+            {isTruncated && (
+                <Alert
+                    severity="info"
+                    role="status"
+                    data-testid="daily-file-truncated-notice"
+                    sx={{ mx: 1, my: 0.5, py: 0, "& .MuiAlert-message": { textWrap: "pretty" } }}
+                >
+                    {t('dailyFileSliceTruncatedNotice', {
+                        limit: DEFAULT_DAILY_FILE_SLICE_LIMIT.toLocaleString(locale),
+                    })}
+                </Alert>
+            )}
             <Box
                 component="pre"
                 sx={{

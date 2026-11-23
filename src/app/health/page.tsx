@@ -4,6 +4,7 @@ import React, {useEffect, useMemo, useState} from "react";
 import {
     Alert,
     Box,
+    Button,
     Chip,
     CircularProgress,
     Paper,
@@ -18,6 +19,7 @@ import {
     Typography,
 } from "@mui/material";
 import {
+    CampaignRounded,
     CheckCircleRounded,
     ErrorRounded,
     MonitorHeartRounded,
@@ -27,6 +29,19 @@ import {
 
 import {useLanguage} from "@/app/contexts/LanguageContext";
 import {getIntlLocale} from "@/app/utils/LocaleUtils";
+import LaneWebRelayDialog from "@/app/_components/webrelay/LaneWebRelayDialog";
+import {
+    getCachedSessionInfo,
+    subscribeSessionInfo,
+} from "@/lib/data/oscar/AuthSessionApi";
+import {
+    fetchLaneWebRelayStatusSafe,
+    type LaneWebRelayStatusEntry,
+} from "@/lib/data/oscar/WebRelayApi";
+import {
+    OSCAR_SANDBOX_LANES_EVENT,
+    OSCAR_SANDBOX_TELEMETRY_EVENT,
+} from "@/lib/data/oscar/TrainingSandboxApi";
 import {
     DEFAULT_OCCUPANCY_THRESHOLD_MINUTES,
     deriveLaneHealthRows,
@@ -86,15 +101,97 @@ export default function HealthPage() {
     const {language, t} = useLanguage();
     const {lanes, isLoading, thresholdMinutes} = useLaneHealth();
     const [now, setNow] = useState(Date.now());
+    const [isAdmin, setIsAdmin] = useState<boolean>(() => Boolean(getCachedSessionInfo()?.isAdmin));
+    const [webRelayByLane, setWebRelayByLane] = useState<Map<string, LaneWebRelayStatusEntry>>(new Map());
+    const [webRelayDialogOpen, setWebRelayDialogOpen] = useState(false);
+    const [webRelayDialogLane, setWebRelayDialogLane] = useState<string | undefined>(undefined);
 
     useEffect(() => {
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
     }, []);
 
+    useEffect(() => {
+        setIsAdmin(Boolean(getCachedSessionInfo()?.isAdmin));
+        return subscribeSessionInfo((sess) => {
+            setIsAdmin(Boolean(sess?.isAdmin));
+        });
+    }, []);
+
+    const applyWebRelayEntries = React.useCallback((entries: LaneWebRelayStatusEntry[]) => {
+        const next = new Map<string, LaneWebRelayStatusEntry>();
+        for (const entry of entries) {
+            if (entry.laneName) {
+                next.set(entry.laneName, entry);
+            }
+        }
+        setWebRelayByLane(next);
+    }, []);
+
+    const anyLaneHasWebRelayKeyword = useMemo(
+        () => lanes.some((lane) => Boolean(lane.webRelayConfigured)),
+        [lanes],
+    );
+
+    useEffect(() => {
+        if (!isAdmin && !anyLaneHasWebRelayKeyword) {
+            return;
+        }
+        let active = true;
+        const controller = new AbortController();
+        const pollWebRelays = async () => {
+            const payload = await fetchLaneWebRelayStatusSafe({signal: controller.signal});
+            if (!active || !payload) return;
+            setIsAdmin(Boolean(payload.isAdmin));
+            applyWebRelayEntries(payload.lanes ?? []);
+        };
+        void pollWebRelays();
+        const interval = window.setInterval(() => {
+            void pollWebRelays();
+        }, 30_000);
+        const onSandboxMutated = () => {
+            void pollWebRelays();
+        };
+        window.addEventListener(OSCAR_SANDBOX_LANES_EVENT, onSandboxMutated);
+        window.addEventListener(OSCAR_SANDBOX_TELEMETRY_EVENT, onSandboxMutated);
+        return () => {
+            active = false;
+            controller.abort();
+            window.clearInterval(interval);
+            window.removeEventListener(OSCAR_SANDBOX_LANES_EVENT, onSandboxMutated);
+            window.removeEventListener(OSCAR_SANDBOX_TELEMETRY_EVENT, onSandboxMutated);
+        };
+    }, [anyLaneHasWebRelayKeyword, applyWebRelayEntries, isAdmin]);
+
+    const mergedLanes = useMemo(() => {
+        if (webRelayByLane.size === 0) return lanes;
+        return lanes.map((lane) => {
+            const wr = webRelayByLane.get(lane.laneName);
+            if (!wr || !wr.enabled) return lane;
+            const chips: ComponentHealth[] = [
+                {
+                    id: `${lane.laneName}-webrelay-primary`,
+                    label: `${t("webrelayChipPrimary")} (${wr.mode})`,
+                    state: wr.primaryOnline ? "online" : "offline",
+                },
+            ];
+            if (wr.ancillaryEnabled) {
+                chips.push({
+                    id: `${lane.laneName}-webrelay-ancillary`,
+                    label: t("webrelayChipAncillary"),
+                    state: wr.ancillaryOnline ? "online" : "offline",
+                });
+            }
+            return {
+                ...lane,
+                webRelays: chips,
+            };
+        });
+    }, [lanes, t, webRelayByLane]);
+
     const laneRows = useMemo(
-        () => deriveLaneHealthRows(lanes, now, thresholdMinutes),
-        [lanes, now, thresholdMinutes],
+        () => deriveLaneHealthRows(mergedLanes, now, thresholdMinutes),
+        [mergedLanes, now, thresholdMinutes],
     );
     const summary = useMemo(() => summarizeLaneHealth(laneRows), [laneRows]);
     const thresholdSummaryLabel = useMemo(() => {
@@ -110,6 +207,11 @@ export default function HealthPage() {
         return `${thresholds[0]}–${thresholds[thresholds.length - 1]} ${t("minutes")}`;
     }, [laneRows, t]);
 
+    const openWebRelayForLane = (laneName?: string) => {
+        setWebRelayDialogLane(laneName);
+        setWebRelayDialogOpen(true);
+    };
+
     return (
         <Stack spacing={2} sx={{pb: 2, minInlineSize: 0}}>
             <Stack direction={{xs: "column", md: "row"}} justifyContent="space-between" alignItems={{xs: "stretch", md: "center"}} spacing={2}>
@@ -120,21 +222,35 @@ export default function HealthPage() {
                         <Typography variant="body2" color="text.secondary">{t("healthDescription")}</Typography>
                     </Box>
                 </Stack>
-                <Paper variant="outlined" sx={{p: 1.5}} data-testid="health-threshold-summary">
-                    <Stack direction="row" spacing={1.5} alignItems="center">
-                        <Box>
-                            <Typography variant="caption" color="text.secondary">{t("extendedOccupancyThreshold")}</Typography>
-                            <Typography variant="body2">{t("configuredInAdminPerLane")}</Typography>
-                        </Box>
-                        <Chip
-                            size="small"
-                            color="primary"
+                <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
+                    {isAdmin && laneRows.length > 0 && (
+                        <Button
+                            type="button"
                             variant="outlined"
-                            label={thresholdSummaryLabel}
-                            sx={{fontWeight: 600}}
-                        />
-                    </Stack>
-                </Paper>
+                            size="small"
+                            startIcon={<CampaignRounded/>}
+                            onClick={() => openWebRelayForLane(laneRows[0]?.laneName)}
+                            data-testid="webrelay-open-header-btn"
+                        >
+                            {t("webrelayHeaderButton")}
+                        </Button>
+                    )}
+                    <Paper variant="outlined" sx={{p: 1.5}} data-testid="health-threshold-summary">
+                        <Stack direction="row" spacing={1.5} alignItems="center">
+                            <Box>
+                                <Typography variant="caption" color="text.secondary">{t("extendedOccupancyThreshold")}</Typography>
+                                <Typography variant="body2">{t("configuredInAdminPerLane")}</Typography>
+                            </Box>
+                            <Chip
+                                size="small"
+                                color="primary"
+                                variant="outlined"
+                                label={thresholdSummaryLabel}
+                                sx={{fontWeight: 600}}
+                            />
+                        </Stack>
+                    </Paper>
+                </Stack>
             </Stack>
 
             <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -204,6 +320,27 @@ export default function HealthPage() {
                                             )) : (
                                                 <Chip size="small" variant="outlined" icon={<VideocamRounded/>} label={t("noCameras")}/>
                                             )}
+                                            {(lane.webRelays ?? []).map((relay) => (
+                                                <StatusIndicator
+                                                    key={relay.id}
+                                                    component={relay}
+                                                    labels={{online: t("online"), offline: t("offline"), unknown: t("waiting")}}
+                                                />
+                                            ))}
+                                            {isAdmin && (
+                                                <Button
+                                                    type="button"
+                                                    size="small"
+                                                    variant="text"
+                                                    startIcon={<CampaignRounded fontSize="small"/>}
+                                                    aria-label={`${t("webrelayRowAction")} — ${lane.laneName}`}
+                                                    onClick={() => openWebRelayForLane(lane.laneName)}
+                                                    data-testid={`webrelay-open-lane-${lane.laneName}`}
+                                                    sx={{textTransform: "none", py: 0.25, px: 0.75, minHeight: 26}}
+                                                >
+                                                    {t("webrelayRowAction")}
+                                                </Button>
+                                            )}
                                         </Stack>
                                     </TableCell>
                                     <TableCell sx={{verticalAlign: "top", minWidth: 390}}>
@@ -258,6 +395,14 @@ export default function HealthPage() {
                         </TableBody>
                     </Table>
                 </TableContainer>
+            )}
+            {isAdmin && (
+                <LaneWebRelayDialog
+                    open={webRelayDialogOpen}
+                    initialLaneNameOrUid={webRelayDialogLane}
+                    onClose={() => setWebRelayDialogOpen(false)}
+                    onUpdated={applyWebRelayEntries}
+                />
             )}
         </Stack>
     );

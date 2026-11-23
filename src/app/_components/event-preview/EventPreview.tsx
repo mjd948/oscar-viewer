@@ -120,6 +120,24 @@ export function EventPreview() {
 
     useEffect(() => {
         if (vehicleIdTouched || vehicleId.trim().length > 0) return;
+        const confirmedEventVeh = eventPreview.eventData?.vehicleId && !eventPreview.eventData.vehicleIdFromOcr
+            ? eventPreview.eventData.vehicleId.trim()
+            : "";
+        if (confirmedEventVeh) {
+            setVehicleId(confirmedEventVeh);
+            setVehicleIdAutoFilled(false);
+            setAdjFormData(previous => previous ? {...previous, vehicleId: confirmedEventVeh} : previous);
+            setAdjudication(previous => {
+                if (!previous) return previous;
+                const updated = Object.assign(
+                    Object.create(Object.getPrototypeOf(previous)),
+                    previous,
+                ) as AdjudicationData;
+                updated.setVehicleId(confirmedEventVeh);
+                return updated;
+            });
+            return;
+        }
         const candidate = selectAutoFillCandidate(ocrResults);
         if (!candidate) return;
         setVehicleId(candidate.value);
@@ -134,7 +152,7 @@ export function EventPreview() {
             updated.setVehicleId(candidate.value);
             return updated;
         });
-    }, [ocrResults, vehicleId, vehicleIdTouched]);
+    }, [eventPreview.eventData?.vehicleId, eventPreview.eventData?.vehicleIdFromOcr, ocrResults, vehicleId, vehicleIdTouched]);
 
     //snackbar
     const [adjSnackMsg, setAdjSnackMsg] = useState('');
@@ -299,7 +317,16 @@ export function EventPreview() {
             }
 
 
-            eventPreview.eventData.adjudicatedData = comboData;
+            let updatedEvent = eventPreview.eventData;
+            if (Object.isFrozen(eventPreview.eventData) || !Object.isExtensible(eventPreview.eventData)) {
+                updatedEvent = Object.assign(
+                    Object.create(Object.getPrototypeOf(eventPreview.eventData)),
+                    eventPreview.eventData,
+                    {adjudicatedData: comboData},
+                );
+            } else {
+                eventPreview.eventData.adjudicatedData = comboData;
+            }
             markSessionCachedEventAdjudicated(
                 comboData.occupancyObsId,
                 comboData.adjudicationCode?.code,
@@ -307,8 +334,8 @@ export function EventPreview() {
 
 
             // Dispatch actions
-            dispatch(setSelectedEvent(eventPreview.eventData));
-            dispatch(setAdjudicatedEventId(eventPreview.eventData.id));
+            dispatch(setSelectedEvent(updatedEvent));
+            dispatch(setAdjudicatedEventId(updatedEvent.id));
             // dispatch(triggerEventTableRefresh());
 
             setAdjSnackMsg(t('adjudicationSuccessful', {occupancyId: eventPreview.eventData.occupancyCount}));

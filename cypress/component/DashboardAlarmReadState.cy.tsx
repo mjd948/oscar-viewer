@@ -12,6 +12,7 @@ import eventDataReducer, {
     setDashboardUnreadAlarmCount,
 } from "../../src/lib/state/EventDataSlice";
 import oscarClientReducer, {
+    setAlarmAudioVolume,
     setContinuousAlarmAudio,
 } from "../../src/lib/state/OSCARClientSlice";
 import eventPreviewReducer from "../../src/lib/state/EventPreviewSlice";
@@ -474,6 +475,13 @@ describe("Site-shared per-lane Dashboard alarm read state and latching audio", (
             </AppRouterContext.Provider>,
         );
 
+        // Redundant sub-toolbar horizon banner is absent while quick window presets remain accessible.
+        cy.get('[data-testid="dashboard-alarm-window-notice"]').should("not.exist");
+        cy.contains("Showing active alarms from the last").should("not.exist");
+        cy.get('[data-testid="toolbar-time-window-15d"]')
+            .should("be.visible")
+            .and("have.attr", "aria-pressed", "true");
+
         // All 3 rows initially render as unread (.unread-alarm-row, bold 700, unread dot present).
         cy.contains(".MuiDataGrid-row", "501")
             .should("have.class", "unread-alarm-row")
@@ -620,6 +628,96 @@ describe("Site-shared per-lane Dashboard alarm read state and latching audio", (
         });
         cy.wrap(null).should(() => {
             expect(fakeAudio.loop).to.equal(false);
+            expect(isPaused).to.equal(true);
+        });
+    });
+
+    it("updates active one-shot alarm playback volume immediately and mutes/pauses when dragged to 0 (#49)", () => {
+        const store = configureStore({
+            reducer: {
+                eventLogSlice: eventDataReducer,
+                oscarClientSlice: oscarClientReducer,
+            },
+        });
+
+        const fakeAudio = getAlarmAudio();
+        let isPaused = true;
+        Object.defineProperty(fakeAudio, "paused", {
+            configurable: true,
+            get: () => isPaused,
+        });
+        cy.stub(fakeAudio, "play").callsFake(async () => {
+            isPaused = false;
+        });
+        cy.stub(fakeAudio, "pause").callsFake(() => {
+            isPaused = true;
+        });
+
+        store.dispatch(setContinuousAlarmAudio(false));
+        store.dispatch(setAlarmAudioVolume(60));
+
+        cy.mount(
+            <Provider store={store as any}>
+                <LanguageProvider>
+                    <div>
+                        <button type="button" data-testid="gesture-unlock-oneshot">Unlock</button>
+                        <AlarmAudio />
+                    </div>
+                </LanguageProvider>
+            </Provider>,
+        );
+
+        cy.get('[data-testid="gesture-unlock-oneshot"]').click();
+        cy.then(() => {
+            expect(isPaused).to.equal(true);
+            expect(fakeAudio.muted).to.equal(false);
+            expect(fakeAudio.volume).to.be.closeTo(0.6, 0.001);
+            // Trigger one-shot alarm; triggerAlarm resets to false immediately while clip continues playing.
+            store.dispatch(setAlarmTrigger(true));
+        });
+
+        cy.wrap(null).should(() => {
+            expect(isPaused).to.equal(false);
+            expect(store.getState().eventLogSlice.triggerAlarm).to.equal(false);
+            expect(fakeAudio.volume).to.be.closeTo(0.6, 0.001);
+        });
+
+        // Adjust volume mid-playback (60 -> 25 -> 85): takes effect immediately without waiting for next trigger.
+        cy.then(() => {
+            store.dispatch(setAlarmAudioVolume(25));
+        });
+        cy.wrap(null).should(() => {
+            expect(isPaused).to.equal(false);
+            expect(fakeAudio.muted).to.equal(false);
+            expect(fakeAudio.volume).to.be.closeTo(0.25, 0.001);
+        });
+
+        cy.then(() => {
+            store.dispatch(setAlarmAudioVolume(85));
+        });
+        cy.wrap(null).should(() => {
+            expect(isPaused).to.equal(false);
+            expect(fakeAudio.muted).to.equal(false);
+            expect(fakeAudio.volume).to.be.closeTo(0.85, 0.001);
+        });
+
+        // Dragging slider to 0 (mute) mid-playback immediately mutes and stops the playing clip.
+        cy.then(() => {
+            store.dispatch(setAlarmAudioVolume(0));
+        });
+        cy.wrap(null).should(() => {
+            expect(fakeAudio.volume).to.equal(0);
+            expect(fakeAudio.muted).to.equal(true);
+            expect(isPaused).to.equal(true);
+        });
+
+        // Restoring volume above 0 unmutes for future alarms without resuming the already-stopped one-shot clip.
+        cy.then(() => {
+            store.dispatch(setAlarmAudioVolume(40));
+        });
+        cy.wrap(null).should(() => {
+            expect(fakeAudio.volume).to.be.closeTo(0.4, 0.001);
+            expect(fakeAudio.muted).to.equal(false);
             expect(isPaused).to.equal(true);
         });
     });
@@ -1166,5 +1264,298 @@ describe("Site-shared per-lane Dashboard alarm read state and latching audio", (
             expect(store.getState().eventLogSlice.dashboardUnreadAlarmCount).to.equal(1);
             expect(serverLanes.Lane21?.acknowledgedThroughMs ?? 0).to.equal(0);
         });
+    });
+
+    it("switches Dashboard between priority-category sorting and purely chronological newest-first sorting", () => {
+        const nowMs = Date.now();
+        const newestGammaStart = new Date(nowMs - 2 * 60_000).toISOString();
+        const newestGammaEnd = new Date(nowMs - 1 * 60_000).toISOString();
+        const olderNeutronStart = new Date(nowMs - 20 * 60_000).toISOString();
+        const olderNeutronEnd = new Date(nowMs - 19 * 60_000).toISOString();
+        const oldestBothStart = new Date(nowMs - 45 * 60_000).toISOString();
+        const oldestBothEnd = new Date(nowMs - 44 * 60_000).toISOString();
+
+        // Server returns chronological newest-first order when queried without priority buckets.
+        const obsRows = [
+            {
+                id: "obs-gamma-new",
+                properties: {id: "obs-gamma-new", "datastream@id": "ds-occ-sort"},
+                phenomenonTime: newestGammaEnd,
+                resultTime: newestGammaEnd,
+                result: {
+                    occupancyCount: 3001,
+                    startTime: newestGammaStart,
+                    endTime: newestGammaEnd,
+                    gammaAlarm: true,
+                    neutronAlarm: false,
+                    maxGamma: 1850,
+                    maxNeutron: 2,
+                    adjudicatedIds: [],
+                    videoPaths: [],
+                },
+            },
+            {
+                id: "obs-neutron-mid",
+                properties: {id: "obs-neutron-mid", "datastream@id": "ds-occ-sort"},
+                phenomenonTime: olderNeutronEnd,
+                resultTime: olderNeutronEnd,
+                result: {
+                    occupancyCount: 3002,
+                    startTime: olderNeutronStart,
+                    endTime: olderNeutronEnd,
+                    gammaAlarm: false,
+                    neutronAlarm: true,
+                    maxGamma: 420,
+                    maxNeutron: 28,
+                    adjudicatedIds: [],
+                    videoPaths: [],
+                },
+            },
+            {
+                id: "obs-both-old",
+                properties: {id: "obs-both-old", "datastream@id": "ds-occ-sort"},
+                phenomenonTime: oldestBothEnd,
+                resultTime: oldestBothEnd,
+                result: {
+                    occupancyCount: 3003,
+                    startTime: oldestBothStart,
+                    endTime: oldestBothEnd,
+                    gammaAlarm: true,
+                    neutronAlarm: true,
+                    maxGamma: 2400,
+                    maxNeutron: 31,
+                    adjudicatedIds: [],
+                    videoPaths: [],
+                },
+            },
+        ];
+
+        const observedSearchFilters: string[] = [];
+        cy.intercept("GET", "**/observations/count*", {
+            statusCode: 200,
+            body: {count: 3},
+        });
+
+        const mockReadStateFetch: DashboardReadStateFetch = async () =>
+            new Response(
+                JSON.stringify({
+                    schemaVersion: 1,
+                    revision: 1,
+                    updatedAt: new Date().toISOString(),
+                    lanes: {},
+                }),
+                {status: 200, headers: {"Content-Type": "application/json"}},
+            );
+
+        const fakeNode: any = {
+            id: "node-sort-test",
+            name: "GateNode",
+            address: "127.0.0.1",
+            port: 8282,
+            isSecure: false,
+            isDefaultNode: true,
+            oshPathRoot: "/sensorhub",
+            bucketsEndpoint: "/buckets",
+            getConnectedSystemsEndpoint: () => "https://node.example/sensorhub/api",
+            getBasicAuthHeader: () => ({}),
+            getObservationsApi: async () => ({
+                searchObservations: async (obsFilter: any) => {
+                    const filterStr = decodeURIComponent(obsFilter?.props?.filter ?? "");
+                    observedSearchFilters.push(filterStr);
+                    const matched = obsRows.filter(item => {
+                        if (filterStr.includes("gammaAlarm=true AND neutronAlarm=true")) {
+                            return item.result.gammaAlarm && item.result.neutronAlarm;
+                        }
+                        if (filterStr.includes("gammaAlarm=false AND neutronAlarm=true")) {
+                            return !item.result.gammaAlarm && item.result.neutronAlarm;
+                        }
+                        if (filterStr.includes("gammaAlarm=true AND neutronAlarm=false")) {
+                            return item.result.gammaAlarm && !item.result.neutronAlarm;
+                        }
+                        return item.result.gammaAlarm || item.result.neutronAlarm;
+                    });
+                    return {fetchData: async () => matched};
+                },
+            }),
+        };
+
+        const laneMap = new Map<string, any>([
+            [
+                "LaneSort",
+                {
+                    laneName: "LaneSort",
+                    parentNode: fakeNode,
+                    isRS350Backpack: false,
+                    datastreams: [
+                        {
+                            properties: {
+                                id: "ds-occ-sort",
+                                "system@id": "sys-LaneSort",
+                                observedProperties: [{definition: OCCUPANCY_PILLAR_DEF}],
+                            },
+                        },
+                    ],
+                    datastreamSourceMap: new Map(),
+                    findDataStreamByObsProperty: () => null,
+                    lookupSystemIdFromDataStreamId: () => "sys-LaneSort",
+                },
+            ],
+        ]);
+
+        const store = configureStore({
+            reducer: {
+                eventLogSlice: eventDataReducer,
+                oscarClientSlice: oscarClientReducer,
+                eventPreview: eventPreviewReducer,
+            },
+            middleware: getDefault => getDefault({serializableCheck: false}),
+        });
+
+        const mockRouter: any = {
+            push: cy.stub(),
+            replace: cy.stub(),
+            prefetch: cy.stub(),
+            back: cy.stub(),
+            forward: cy.stub(),
+            refresh: cy.stub(),
+        };
+
+        cy.mount(
+            <AppRouterContext.Provider value={mockRouter}>
+                <Provider store={store}>
+                    <LanguageProvider>
+                        <DataSourceContext.Provider value={{
+                            laneMapRef: {current: laneMap},
+                            activeViewKey: null,
+                            viewError: null,
+                            scopedHref: (href: string) => href,
+                        } as any}>
+                            <EventTable
+                                tableMode="alarmtable"
+                                laneMap={laneMap}
+                                readStateFetch={mockReadStateFetch}
+                            />
+                        </DataSourceContext.Provider>
+                    </LanguageProvider>
+                </Provider>
+            </AppRouterContext.Provider>,
+        );
+
+        // Default priority mode: Gamma & Neutron (3003) -> Neutron (3002) -> Gamma (3001)
+        cy.get('[data-testid="toolbar-sort-time-only"]').should("have.attr", "aria-pressed", "false");
+        cy.get(".MuiDataGrid-row").should("have.length", 3);
+        cy.get(".MuiDataGrid-row").eq(0).should("contain.text", "3003");
+        cy.get(".MuiDataGrid-row").eq(1).should("contain.text", "3002");
+        cy.get(".MuiDataGrid-row").eq(2).should("contain.text", "3001");
+
+        // Switch to purely chronological newest-first mode: Gamma (3001) -> Neutron (3002) -> Gamma & Neutron (3003)
+        cy.then(() => {
+            observedSearchFilters.length = 0;
+        });
+        cy.get('[data-testid="toolbar-sort-time-only"]').click();
+        cy.get('[data-testid="toolbar-sort-time-only"]').should("have.attr", "aria-pressed", "true");
+        cy.get('[data-testid="alarm-acknowledge-status"]').should(
+            "contain.text",
+            "Alarms sorted newest first by time",
+        );
+        cy.get(".MuiDataGrid-row").eq(0).should("contain.text", "3001");
+        cy.get(".MuiDataGrid-row").eq(1).should("contain.text", "3002");
+        cy.get(".MuiDataGrid-row").eq(2).should("contain.text", "3003");
+        cy.wrap(null).should(() => {
+            expect(observedSearchFilters).to.have.length(1);
+            expect(observedSearchFilters[0]).to.not.include("gammaAlarm=true AND neutronAlarm=true");
+        });
+
+        // Switch back to priority-category mode
+        cy.get('[data-testid="toolbar-sort-time-only"]').click();
+        cy.get('[data-testid="toolbar-sort-time-only"]').should("have.attr", "aria-pressed", "false");
+        cy.get('[data-testid="alarm-acknowledge-status"]').should(
+            "contain.text",
+            "Alarms sorted by priority category",
+        );
+        cy.get(".MuiDataGrid-row").eq(0).should("contain.text", "3003");
+        cy.get(".MuiDataGrid-row").eq(1).should("contain.text", "3002");
+        cy.get(".MuiDataGrid-row").eq(2).should("contain.text", "3001");
+
+        // Also verify Events (tableMode="eventlog") exposes Newest first and places newer None/Gamma events first
+        cy.then(() => {
+            const newestNoneStart = new Date(nowMs - 30_000).toISOString();
+            const newestNoneEnd = new Date(nowMs - 20_000).toISOString();
+            obsRows.unshift({
+                id: "obs-none-newest",
+                properties: {id: "obs-none-newest", "datastream@id": "ds-occ-sort"},
+                phenomenonTime: newestNoneEnd,
+                resultTime: newestNoneEnd,
+                result: {
+                    occupancyCount: 3000,
+                    startTime: newestNoneStart,
+                    endTime: newestNoneEnd,
+                    gammaAlarm: false,
+                    neutronAlarm: false,
+                    maxGamma: 180,
+                    maxNeutron: 1,
+                    adjudicatedIds: [],
+                    videoPaths: [],
+                },
+            });
+            fakeNode.getObservationsApi = async () => ({
+                searchObservations: async (obsFilter: any) => {
+                    const filterStr = decodeURIComponent(obsFilter?.props?.filter ?? "");
+                    const matched = obsRows.filter(item => {
+                        if (filterStr.includes("gammaAlarm=true AND neutronAlarm=true")) {
+                            return item.result.gammaAlarm && item.result.neutronAlarm;
+                        }
+                        if (filterStr.includes("gammaAlarm=false AND neutronAlarm=true")) {
+                            return !item.result.gammaAlarm && item.result.neutronAlarm;
+                        }
+                        if (filterStr.includes("gammaAlarm=true AND neutronAlarm=false")) {
+                            return item.result.gammaAlarm && !item.result.neutronAlarm;
+                        }
+                        if (filterStr.includes("gammaAlarm=false AND neutronAlarm=false")) {
+                            return !item.result.gammaAlarm && !item.result.neutronAlarm;
+                        }
+                        return true;
+                    });
+                    return {fetchData: async () => matched};
+                },
+            });
+
+            cy.mount(
+                <AppRouterContext.Provider value={mockRouter}>
+                    <Provider store={store}>
+                        <LanguageProvider>
+                            <DataSourceContext.Provider value={{
+                                laneMapRef: {current: laneMap},
+                                activeViewKey: null,
+                                viewError: null,
+                                scopedHref: (href: string) => href,
+                            } as any}>
+                                <EventTable
+                                    key="eventlog-instance"
+                                    tableMode="eventlog"
+                                    viewAdjudicated
+                                    laneMap={laneMap}
+                                />
+                            </DataSourceContext.Provider>
+                        </LanguageProvider>
+                    </Provider>
+                </AppRouterContext.Provider>,
+            );
+        });
+
+        cy.get('[data-testid="toolbar-sort-time-only"]').should("have.attr", "aria-pressed", "false");
+        cy.get(".MuiDataGrid-row").eq(0).should("contain.text", "3003");
+        cy.get(".MuiDataGrid-row").eq(3).should("contain.text", "3000");
+
+        cy.get('[data-testid="toolbar-sort-time-only"]').click();
+        cy.get('[data-testid="toolbar-sort-time-only"]').should("have.attr", "aria-pressed", "true");
+        cy.get('[data-testid="alarm-acknowledge-status"]').should(
+            "contain.text",
+            "Events sorted newest first by time",
+        );
+        cy.get(".MuiDataGrid-row").eq(0).should("contain.text", "3000");
+        cy.get(".MuiDataGrid-row").eq(1).should("contain.text", "3001");
+        cy.get(".MuiDataGrid-row").eq(2).should("contain.text", "3002");
+        cy.get(".MuiDataGrid-row").eq(3).should("contain.text", "3003");
     });
 });

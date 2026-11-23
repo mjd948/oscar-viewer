@@ -71,6 +71,41 @@ export interface UpSetCoOccurrencePayload {
     intersections: UpSetIntersectionItem[];
 }
 
+export interface DisplayedUpSetColumnItem extends UpSetIntersectionItem {
+    coOccurringSets: string[];
+    otherSnmRollup: boolean;
+    rolledUpMasks: number[];
+    excludedSnmMasks: number[];
+    rolledUpCombinationCount: number;
+}
+
+export type UpSetFilterSelection =
+    | {
+          kind: "category";
+          setName: UpSetSetName | string;
+          bit: number;
+          label: string;
+          count: number;
+          snmPresent: boolean;
+      }
+    | {
+          kind: "intersection";
+          mask: number;
+          label: string;
+          count: number;
+          snmPresent: boolean;
+      }
+    | {
+          kind: "otherSnm";
+          masks: number[];
+          excludedMasks: number[];
+          label: string;
+          count: number;
+          snmPresent: true;
+      };
+
+export const UPSET_OTHER_SNM_SYNTHETIC_MASK = -1000;
+
 export interface N42AlarmReportItem {
     samplingTime?: string | number;
     alarmCategoryCode?: string;
@@ -627,16 +662,191 @@ function classifyDispositionCodeBits(codeNum: number): number {
     return 0;
 }
 
-function finalizeUpSetFromCounts(countsByMask: readonly number[], totalOccupancies: number): UpSetCoOccurrencePayload {
-    const setTotals: UpSetSetTotalItem[] = UPSET_SET_DEFS.map((def) => {
-        let sum = 0;
-        for (let m = 1; m < 128; m++) {
-            if ((m & def.bit) !== 0) {
-                sum += countsByMask[m];
-            }
+export function getUpSetCategoryBit(name: string | null | undefined): number {
+    if (!name) return 0;
+    const def = UPSET_SET_DEFS.find((d) => d.name.toLowerCase() === name.trim().toLowerCase());
+    return def ? def.bit : 0;
+}
+
+export function setsToUpSetMask(sets: readonly string[] | null | undefined): number {
+    if (!sets || sets.length === 0) return 0;
+    let mask = 0;
+    for (const s of sets) {
+        mask |= getUpSetCategoryBit(s);
+    }
+    return mask;
+}
+
+/**
+ * Orders the 7 main UpSet categories so populated categories (`count > 0`) always appear first
+ * (sorted descending by occupancy count, with SNM breaking ties first), followed by zero-count categories.
+ */
+export function orderUpSetSetsPopulatedFirst(sets: readonly UpSetSetTotalItem[]): UpSetSetTotalItem[] {
+    return [...sets].sort((a, b) => {
+        const aPop = a.count > 0 ? 0 : 1;
+        const bPop = b.count > 0 ? 0 : 1;
+        if (aPop !== bPop) return aPop - bPop;
+        if (b.count !== a.count) return b.count - a.count;
+        const aSnm = Boolean(a.snm || a.name === "SNM");
+        const bSnm = Boolean(b.snm || b.name === "SNM");
+        if (aSnm !== bSnm) return aSnm ? -1 : 1;
+        return a.name.localeCompare(b.name);
+    });
+}
+
+function resolveIntersectionMemberSets(inter: UpSetIntersectionItem): string[] {
+    if (Array.isArray(inter.sets) && inter.sets.length > 0) return inter.sets;
+    if (Array.isArray(inter.activeSets) && inter.activeSets.length > 0) return inter.activeSets;
+    return [];
+}
+
+export function resolveIntersectionMask(inter: UpSetIntersectionItem): number {
+    if (typeof inter.mask === "number" && inter.mask > 0) return inter.mask;
+    return setsToUpSetMask(resolveIntersectionMemberSets(inter));
+}
+
+/**
+ * Builds the displayed UpSet intersection columns capped at `maxIntersections`.
+ * Whenever rare SNM-present combinations fall outside `maxIntersections`, they are rolled into
+ * a crimson `"Other SNM"` column (replacing the lowest-ranked non-SNM column so total columns
+ * never exceed `maxIntersections`) ensuring the SNM vertical bars always sum to the exact SNM total on the left.
+ */
+export function buildDisplayedUpSetColumns(
+    intersections: readonly UpSetIntersectionItem[],
+    maxIntersections: number,
+    otherSnmLabel = "Other SNM",
+): DisplayedUpSetColumnItem[] {
+    if (!Array.isArray(intersections) || intersections.length === 0) return [];
+    const cap = Math.max(1, maxIntersections);
+
+    const toRegularColumn = (inter: UpSetIntersectionItem): DisplayedUpSetColumnItem => {
+        const memberSets = resolveIntersectionMemberSets(inter);
+        const mask = resolveIntersectionMask(inter);
+        return {
+            ...inter,
+            mask,
+            sets: memberSets,
+            activeSets: memberSets,
+            coOccurringSets: [],
+            otherSnmRollup: false,
+            rolledUpMasks: mask > 0 ? [mask] : [],
+            excludedSnmMasks: [],
+            rolledUpCombinationCount: 1,
+        };
+    };
+
+    if (intersections.length <= cap) {
+        return intersections.map(toRegularColumn);
+    }
+
+    const overflowSnm = intersections
+        .slice(cap)
+        .filter((inter) => inter.snmPresent && inter.count > 0);
+
+    if (overflowSnm.length === 0) {
+        return intersections.slice(0, cap).map(toRegularColumn);
+    }
+
+    const kept = [...intersections.slice(0, cap)];
+    const rolled: UpSetIntersectionItem[] = [];
+    let dropNonSnmIdx = -1;
+    for (let i = kept.length - 1; i >= 0; i--) {
+        if (!kept[i].snmPresent) {
+            dropNonSnmIdx = i;
+            break;
         }
-        return { name: def.name, count: sum, snm: def.snm };
-    }).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    }
+    if (dropNonSnmIdx >= 0) {
+        kept.splice(dropNonSnmIdx, 1);
+    } else {
+        const popped = kept.pop();
+        if (popped) rolled.push(popped);
+    }
+    rolled.push(...overflowSnm);
+
+    let otherSnmCount = 0;
+    const coSets = new Set<string>();
+    const rolledMasks: number[] = [];
+    for (const r of rolled) {
+        otherSnmCount += r.count;
+        const m = resolveIntersectionMask(r);
+        if (m > 0) rolledMasks.push(m);
+        for (const s of resolveIntersectionMemberSets(r)) {
+            if (s !== "SNM") coSets.add(s);
+        }
+    }
+
+    const keptColumns = kept.map(toRegularColumn);
+    const keptSnmMasks = keptColumns
+        .filter((c) => c.snmPresent && typeof c.mask === "number" && c.mask > 0)
+        .map((c) => c.mask as number);
+
+    return [
+        ...keptColumns,
+        {
+            mask: UPSET_OTHER_SNM_SYNTHETIC_MASK,
+            label: otherSnmLabel,
+            sets: ["SNM"],
+            activeSets: ["SNM"],
+            coOccurringSets: Array.from(coSets),
+            count: otherSnmCount,
+            snmPresent: true,
+            otherSnmRollup: true,
+            rolledUpMasks: rolledMasks,
+            excludedSnmMasks: keptSnmMasks,
+            rolledUpCombinationCount: rolled.length,
+        },
+    ];
+}
+
+export function matchesUpSetFilter(
+    eventMask: number,
+    selection: UpSetFilterSelection | null | undefined,
+): boolean {
+    if (!selection) return true;
+    if (eventMask <= 0) return false;
+    if (selection.kind === "category") {
+        return selection.bit > 0 && (eventMask & selection.bit) !== 0;
+    }
+    if (selection.kind === "intersection") {
+        return eventMask === selection.mask;
+    }
+    if (selection.masks.length > 0) {
+        return selection.masks.includes(eventMask);
+    }
+    return (eventMask & BIT_SNM) !== 0 && !selection.excludedMasks.includes(eventMask);
+}
+
+export function isUpSetFilterValidForData(
+    data: UpSetCoOccurrencePayload | null | undefined,
+    selection: UpSetFilterSelection | null | undefined,
+    maxIntersections = 18,
+): boolean {
+    if (!selection) return true;
+    if (!data || data.totalOccupancies <= 0 || !Array.isArray(data.intersections)) return false;
+    if (selection.kind === "category") {
+        const found = data.sets.find((s) => s.name === selection.setName);
+        return Boolean(found && found.count > 0);
+    }
+    if (selection.kind === "intersection") {
+        return data.intersections.some((col) => resolveIntersectionMask(col) === selection.mask && col.count > 0);
+    }
+    const cols = buildDisplayedUpSetColumns(data.intersections, maxIntersections);
+    return cols.some((c) => c.otherSnmRollup && c.count > 0);
+}
+
+function finalizeUpSetFromCounts(countsByMask: readonly number[], totalOccupancies: number): UpSetCoOccurrencePayload {
+    const setTotals: UpSetSetTotalItem[] = orderUpSetSetsPopulatedFirst(
+        UPSET_SET_DEFS.map((def) => {
+            let sum = 0;
+            for (let m = 1; m < 128; m++) {
+                if ((m & def.bit) !== 0) {
+                    sum += countsByMask[m];
+                }
+            }
+            return { name: def.name, count: sum, snm: def.snm };
+        }),
+    );
 
     const intersections: UpSetIntersectionItem[] = [];
     for (let m = 1; m < 128; m++) {
@@ -658,7 +868,12 @@ function finalizeUpSetFromCounts(countsByMask: readonly number[], totalOccupanci
         });
     }
 
-    intersections.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    intersections.sort(
+        (a, b) =>
+            b.count - a.count
+            || (a.snmPresent === b.snmPresent ? 0 : a.snmPresent ? -1 : 1)
+            || a.label.localeCompare(b.label),
+    );
 
     return {
         totalOccupancies,
