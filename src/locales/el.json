@@ -911,5 +911,10 @@
   "vizTimeProfile": "Time-of-day profile",
   "widgetSettings": "Widget settings",
   "widgetTitle": "Widget title",
-  "laneView": "Προβολή λωρίδας"
+  "laneView": "Προβολή λωρίδας",
+  "eventLookup": "Αναζήτηση συμβάντος",
+  "rs350Spectrum": "Φάσματα RS-350",
+  "rs350SpectrumOnly": "Η λωρίδα {lane} δεν είναι RS-350· τα φάσματα εμφανίζονται μόνο για ανιχνευτές RS-350.",
+  "openFullPage": "Άνοιγμα πλήρους σελίδας",
+  "selectEventForDetails": "Επιλέξτε ένα συμβάν σε πίνακα συναγερμών ή συμβάντων αυτής της σελίδας για να δείτε εδώ τις λεπτομέρειές του."
 }

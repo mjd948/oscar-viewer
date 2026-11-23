@@ -911,5 +911,10 @@
   "vizTimeProfile": "Profil horaire",
   "widgetSettings": "Paramètres du widget",
   "widgetTitle": "Titre du widget",
-  "laneView": "Vue de la voie"
+  "laneView": "Vue de la voie",
+  "eventLookup": "Recherche d'événement",
+  "rs350Spectrum": "Spectres RS-350",
+  "rs350SpectrumOnly": "{lane} n'est pas une voie RS-350 ; les spectres ne sont affichés que pour les détecteurs RS-350.",
+  "openFullPage": "Ouvrir la page complète",
+  "selectEventForDetails": "Sélectionnez un événement dans un tableau d'alarmes ou d'événements de cette page pour en voir les détails ici."
 }

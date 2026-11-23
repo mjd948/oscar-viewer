@@ -103,17 +103,28 @@ function buildTemplatePages(): PageConfig[] {
         ],
         filters: {lanes: {mode: 'all'}, adjudicated: 'any'},
     });
+    // ORNL's Events page carries the event-ID lookup in its header.
+    const eventLookup = widget('event-log-lookup', 'event-lookup', {});
     const eventLog: PageConfig = {
         id: 'event-log',
         title: 'events',
         icon: 'warning',
         seededRoute: '/event-log/',
         showInNav: true,
-        widgets: [eventTable],
+        widgets: [eventLookup, eventTable],
         layouts: {
-            lg: [item(eventTable.id, 'event-table', 0, 0, 12, 42)],
-            md: [item(eventTable.id, 'event-table', 0, 0, 8, 42)],
-            sm: [item(eventTable.id, 'event-table', 0, 0, 4, 42)],
+            lg: [
+                item(eventLookup.id, 'event-lookup', 0, 0, 6, 7),
+                item(eventTable.id, 'event-table', 0, 7, 12, 42),
+            ],
+            md: stacked('md', [
+                {i: eventLookup.id, type: 'event-lookup', h: 7},
+                {i: eventTable.id, type: 'event-table', h: 42},
+            ]),
+            sm: stacked('sm', [
+                {i: eventLookup.id, type: 'event-lookup', h: 9},
+                {i: eventTable.id, type: 'event-table', h: 42},
+            ]),
         },
     };
 
@@ -168,19 +179,19 @@ function buildTemplatePages(): PageConfig[] {
         widgets: [laneStatus, laneVideo, laneChart, laneTable],
         layouts: {
             lg: [
-                item(laneStatus.id, 'lane-detail-status', 0, 0, 12, 6),
-                item(laneVideo.id, 'video', 0, 6, 6, 24),
-                item(laneChart.id, 'chart', 6, 6, 6, 24),
-                item(laneTable.id, 'status-table', 0, 30, 12, 24),
+                item(laneStatus.id, 'lane-detail-status', 0, 0, 12, 10),
+                item(laneVideo.id, 'video', 0, 10, 6, 24),
+                item(laneChart.id, 'chart', 6, 10, 6, 24),
+                item(laneTable.id, 'status-table', 0, 34, 12, 24),
             ],
             md: stacked('md', [
-                {i: laneStatus.id, type: 'lane-detail-status', h: 6},
+                {i: laneStatus.id, type: 'lane-detail-status', h: 10},
                 {i: laneVideo.id, type: 'video', h: 24},
                 {i: laneChart.id, type: 'chart', h: 24},
                 {i: laneTable.id, type: 'status-table', h: 24},
             ]),
             sm: stacked('sm', [
-                {i: laneStatus.id, type: 'lane-detail-status', h: 6},
+                {i: laneStatus.id, type: 'lane-detail-status', h: 10},
                 {i: laneVideo.id, type: 'video', h: 18},
                 {i: laneChart.id, type: 'chart', h: 24},
                 {i: laneTable.id, type: 'status-table', h: 24},
@@ -188,11 +199,31 @@ function buildTemplatePages(): PageConfig[] {
         },
     };
 
-    return [dashboard, eventLog, map, nationalView, laneView];
+    // --- ORNL's single-view pages, each as one full-width widget ---
+    const singleView = (id: string, title: string, icon: string, type: WidgetType, h: number): PageConfig => {
+        const w = widget(`${id}-main`, type, {});
+        return {
+            id, title, icon, showInNav: true,
+            widgets: [w],
+            layouts: {
+                lg: [item(w.id, type, 0, 0, 12, h)],
+                md: [item(w.id, type, 0, 0, 8, h)],
+                sm: [item(w.id, type, 0, 0, 4, h)],
+            },
+        };
+    };
+    const stateOfHealth = singleView('state-of-health', 'stateOfHealth', 'health', 'state-of-health', 48);
+    const reportGenerator = singleView('report-generator', 'reportGenerator', 'report', 'report-generator', 54);
+    const alarmTransfer = singleView('alarm-transfer', 'alarmTransfer', 'transfer', 'alarm-transfer', 42);
+
+    return [dashboard, eventLog, map, nationalView, laneView, stateOfHealth, reportGenerator, alarmTransfer];
 }
 
 /** Template ids offered when creating a page, in display order (i18n key = title). */
-export const PAGE_TEMPLATE_IDS = ['dashboard', 'lane-view', 'map', 'national-view', 'event-log'] as const;
+export const PAGE_TEMPLATE_IDS = [
+    'dashboard', 'lane-view', 'map', 'national-view', 'event-log',
+    'state-of-health', 'report-generator', 'alarm-transfer',
+] as const;
 export type PageTemplateId = typeof PAGE_TEMPLATE_IDS[number];
 
 /** English titles for the legacy seeded pages, whose title was an i18n key. */

@@ -23,7 +23,13 @@ export type WidgetType =
     | 'lane-detail-status'
     | 'status-table'
     | 'quick-view'
-    | 'alarm-stats';
+    | 'alarm-stats'
+    | 'state-of-health'
+    | 'report-generator'
+    | 'alarm-transfer'
+    | 'event-details'
+    | 'event-lookup'
+    | 'rs350-spectrum';
 
 export type RGLBreakpoint = 'lg' | 'md' | 'sm';
 
@@ -146,6 +152,20 @@ export interface StatusTableWidgetConfig {
 export interface QuickViewWidgetConfig {
 }
 
+/**
+ * Whole-page ORNL views hosted as widgets (State of Health, Report Generator, Alarm Transfer,
+ * Event Lookup) and the Event Details widget, which follows the event selected in any alarm or
+ * event table on the page. None take settings.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface PageViewWidgetConfig {
+}
+
+/** ORNL's RS-350 lane view (foreground/background/alarm spectra) for one lane. */
+export interface RS350SpectrumWidgetConfig {
+    laneSource: LaneSource;
+}
+
 export type AlarmStatsVisualization =
     | 'rate-trend'
     | 'adjudication-time'
@@ -224,7 +244,9 @@ export type WidgetConfig =
     | LaneDetailStatusWidgetConfig
     | StatusTableWidgetConfig
     | QuickViewWidgetConfig
-    | AlarmStatsWidgetConfig;
+    | AlarmStatsWidgetConfig
+    | PageViewWidgetConfig
+    | RS350SpectrumWidgetConfig;
 
 export interface WidgetInstance {
     /** Unique per page; doubles as the RGL layout key. */
@@ -295,10 +317,16 @@ export const WIDGET_SIZES: Record<WidgetType, { defaultSize: { w: number, h: num
     'video': {defaultSize: {w: 4, h: 21}, minSize: {w: 2, h: 12}},
     'chart': {defaultSize: {w: 6, h: 15}, minSize: {w: 3, h: 9}},
     'national-stats': {defaultSize: {w: 12, h: 27}, minSize: {w: 6, h: 15}},
-    'lane-detail-status': {defaultSize: {w: 12, h: 6}, minSize: {w: 4, h: 6}},
+    'lane-detail-status': {defaultSize: {w: 12, h: 10}, minSize: {w: 4, h: 6}},
     'status-table': {defaultSize: {w: 12, h: 24}, minSize: {w: 4, h: 12}},
     'quick-view': {defaultSize: {w: 4, h: 39}, minSize: {w: 3, h: 18}},
     'alarm-stats': {defaultSize: {w: 6, h: 21}, minSize: {w: 3, h: 12}},
+    'state-of-health': {defaultSize: {w: 12, h: 42}, minSize: {w: 6, h: 18}},
+    'report-generator': {defaultSize: {w: 12, h: 48}, minSize: {w: 6, h: 24}},
+    'alarm-transfer': {defaultSize: {w: 12, h: 42}, minSize: {w: 4, h: 18}},
+    'event-details': {defaultSize: {w: 12, h: 60}, minSize: {w: 6, h: 24}},
+    'event-lookup': {defaultSize: {w: 6, h: 9}, minSize: {w: 3, h: 7}},
+    'rs350-spectrum': {defaultSize: {w: 12, h: 42}, minSize: {w: 6, h: 18}},
 };
 
 /**
@@ -356,7 +384,14 @@ export function buildDefaultWidgetConfig(type: WidgetType): WidgetConfig {
         case 'status-table':
             return {laneSource: {source: 'page'}, defaultView: 'occupancy'};
         case 'quick-view':
+        case 'state-of-health':
+        case 'report-generator':
+        case 'alarm-transfer':
+        case 'event-details':
+        case 'event-lookup':
             return {};
+        case 'rs350-spectrum':
+            return {laneSource: {source: 'page'}};
         case 'alarm-stats':
             return {
                 visualization: 'rate-trend',
