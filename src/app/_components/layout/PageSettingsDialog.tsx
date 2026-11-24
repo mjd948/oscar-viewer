@@ -20,6 +20,7 @@ import {
 import {useAppDispatch} from "@/lib/state/Hooks";
 import {PageConfig} from "@/lib/layout/PageConfigTypes";
 import {renamePage, setPageIcon} from "@/lib/state/PageLayoutSlice";
+import {pageTitle} from "@/lib/layout/MainPages";
 import {PAGE_ICONS} from "./WidgetRegistry";
 import {useLanguage} from "@/app/contexts/LanguageContext";
 
@@ -33,13 +34,14 @@ export default function PageSettingsDialog({page, open, onClose}: PageSettingsDi
     const dispatch = useAppDispatch();
     const {t} = useLanguage();
 
-    const displayTitle = page.title;
+    // A built-in dashboard shows its translated name; saving it unchanged keeps it following the language.
+    const displayTitle = pageTitle(page, t);
     const [name, setName] = useState(displayTitle);
     const [icon, setIcon] = useState(page.icon ?? 'grid');
 
     useEffect(() => {
         if (open) {
-            setName(page.title);
+            setName(displayTitle);
             setIcon(page.icon ?? 'grid');
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -63,13 +65,11 @@ export default function PageSettingsDialog({page, open, onClose}: PageSettingsDi
                 <Stack spacing={2} sx={{pt: 1}}>
                     <TextField
                         label={t('pageName')}
-                        value={page.mainRoute ? t(page.title) : name}
+                        value={name}
                         onChange={(e) => setName(e.target.value)}
                         size="small"
                         fullWidth
-                        // Built-in main pages keep their (translated) name.
-                        disabled={Boolean(page.mainRoute)}
-                        helperText={page.mainRoute ? t('mainPageNameFixed') : undefined}
+                        inputProps={{'data-testid': 'page-name-input'}}
                     />
                     <ToggleButtonGroup
                         value={icon}

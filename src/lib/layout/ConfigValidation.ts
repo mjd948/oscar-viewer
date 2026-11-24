@@ -13,7 +13,7 @@ import {
     WidgetType,
 } from './PageConfigTypes';
 import {LEGACY_SEEDED_TITLES} from './DefaultPages';
-import {DEFAULT_MAIN_PAGES_MODE, ensureMainPages} from './MainPages';
+import {ensureMainPages, migrateMainPagesToV4, withSlugs} from './MainPages';
 
 export type ValidationResult =
     | { ok: true; value: ExportedConfig }
@@ -164,6 +164,11 @@ export function migratePages(pages: PageConfig[], fromVersion: number): PageConf
             };
         });
     }
+    if (fromVersion < 4) {
+        // v4: the built-in dashboards are ordinary sidebar dashboards (renamable, deletable,
+        // first in the list) with a URL name; ORNL's menu entries and its page switch are gone.
+        migrated = migrateMainPagesToV4(migrated);
+    }
     return migrated;
 }
 
@@ -178,7 +183,6 @@ export function rehydratePageLayoutState(inbound: unknown): PageLayoutState {
         pages: ensureMainPages([]),
         removedSeededPageIds: [],
         editModePageId: null,
-        mainPagesMode: DEFAULT_MAIN_PAGES_MODE,
     };
     if (!isObject(inbound) || !Array.isArray(inbound.pages)) return fallback;
 
@@ -194,11 +198,15 @@ export function rehydratePageLayoutState(inbound: unknown): PageLayoutState {
     }
 
     const fromVersion = isFiniteNumber(inbound.schemaVersion) ? inbound.schemaVersion : 1;
+    // Built-in dashboards the user deleted (before v4 none could be, and the field was unused).
+    const removedSeededPageIds = fromVersion >= 4 && Array.isArray(inbound.removedSeededPageIds)
+        ? inbound.removedSeededPageIds.filter((id: unknown): id is string => typeof id === 'string')
+        : [];
+    // A persisted pre-v4 `mainPagesMode` (ORNL's page switch) is dropped.
     return {
         schemaVersion: PAGE_CONFIG_SCHEMA_VERSION,
-        pages: ensureMainPages(migratePages(validPages, fromVersion)),
-        removedSeededPageIds: [],
+        pages: withSlugs(ensureMainPages(migratePages(validPages, fromVersion), removedSeededPageIds)),
+        removedSeededPageIds,
         editModePageId: null,
-        mainPagesMode: inbound.mainPagesMode === 'ornl' ? 'ornl' : DEFAULT_MAIN_PAGES_MODE,
     };
 }

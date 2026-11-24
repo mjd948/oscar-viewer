@@ -10,6 +10,11 @@ import {createPortal} from "react-dom";
 import {
     Box,
     Button,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogContentText,
+    DialogTitle,
     Divider,
     FormControl,
     IconButton,
@@ -43,13 +48,13 @@ import {
     removePage,
     resetPageToDefault,
     selectEditModePageId,
-    selectMainPagesMode,
     selectPageById,
+    selectPages,
     setEditMode,
     setPageLaneContext,
 } from "@/lib/state/PageLayoutSlice";
 import AddWidgetDialog from "./AddWidgetDialog";
-import {customPageHref, isMainPage, mainPageForRoute, mainPageSpec} from "@/lib/layout/MainPages";
+import {dashboardHref, LANE_VIEW_ROUTE, pageForRoute, pageTitle} from "@/lib/layout/MainPages";
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import PageSettingsDialog from "./PageSettingsDialog";
 import ImportExportDialog from "./ImportExportDialog";
@@ -80,34 +85,32 @@ export default function PageToolbar({pageId, leading}: PageToolbarProps) {
     const editMode = useSelector(selectEditModePageId) === pageId;
     const laneMap = useSelector((state: RootState) => selectLaneMap(state));
     const globalCurrentLane = useSelector(selectCurrentLane);
-    const mainPagesMode = useSelector(selectMainPagesMode);
+    const pages: PageConfig[] = useSelector(selectPages);
     const {laneMapRef, laneMapReady, scopedHref} = useContext(DataSourceContext);
-    const mainPage = isMainPage(page);
     const laneIsRs350 = Boolean(globalCurrentLane && laneMapRef?.current?.get(globalCurrentLane)?.isRS350Backpack);
 
+    // Lane View: RS-350 lanes get the spectra layout, portal lanes the portal one. When the
+    // fitting layout was deleted, ORNL's own Lane View takes the lane (Navbar decides).
+    const fittingLaneView = page?.mainRoute === LANE_VIEW_ROUTE && laneMapReady && globalCurrentLane
+        ? pageForRoute(pages, LANE_VIEW_ROUTE, laneIsRs350) ?? null
+        : undefined;
+    const laneViewSwap = fittingLaneView === undefined || fittingLaneView?.id === page?.id
+        ? undefined
+        : (fittingLaneView ? dashboardHref(fittingLaneView) : LANE_VIEW_ROUTE);
     useEffect(() => {
-        if (!page?.mainRoute) return;
-        // Switch turned off: a built-in main page hands back to ORNL's own page.
-        if (mainPagesMode === 'ornl') {
-            router.replace(scopedHref(page.mainRoute));
-            return;
-        }
-        // Lane View: RS-350 lanes get the spectra layout, portal lanes the portal one.
-        if (mainPageSpec(page.id)?.route === '/lane-view' && laneMapReady && globalCurrentLane) {
-            const fitting = mainPageForRoute('/lane-view', laneIsRs350);
-            if (fitting && fitting.id !== page.id) router.replace(scopedHref(customPageHref(fitting.id)));
-        }
-    }, [page?.id, page?.mainRoute, mainPagesMode, laneMapReady, globalCurrentLane, laneIsRs350, router, scopedHref]);
+        if (laneViewSwap) router.replace(scopedHref(laneViewSwap));
+    }, [laneViewSwap, router, scopedHref]);
 
     const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
+    const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
     const [addWidgetOpen, setAddWidgetOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [importExportOpen, setImportExportOpen] = useState(false);
 
     if (!page) return null;
 
-    // Built-in main pages store an i18n key as their title, so they follow the language.
-    const title = mainPage ? t(page.title) : page.title;
+    // Built-in dashboards store an i18n key as their title until renamed, so they follow the language.
+    const title = pageTitle(page, t);
     const hasTemplate = !!page.templateId;
 
     const laneNames: string[] = laneMap instanceof Map
@@ -126,9 +129,10 @@ export default function PageToolbar({pageId, leading}: PageToolbarProps) {
     };
 
     const handleDeletePage = () => {
-        setMenuAnchor(null);
+        setConfirmDeleteOpen(false);
+        dispatch(setEditMode(null));
         dispatch(removePage(pageId));
-        router.push('/');
+        router.push(scopedHref('/'));
     };
 
     const content = (
@@ -238,14 +242,31 @@ export default function PageToolbar({pageId, leading}: PageToolbarProps) {
                         <ListItemText>{t('resetPage')}</ListItemText>
                     </MenuItem>
                 )}
-                {!mainPage && <Divider/>}
-                {!mainPage && (
-                    <MenuItem onClick={handleDeletePage}>
-                        <ListItemIcon><DeleteOutlineRoundedIcon fontSize="small"/></ListItemIcon>
-                        <ListItemText>{t('deletePage')}</ListItemText>
-                    </MenuItem>
-                )}
+                <Divider/>
+                <MenuItem
+                    onClick={() => { setMenuAnchor(null); setConfirmDeleteOpen(true); }}
+                    data-testid="delete-page-button"
+                >
+                    <ListItemIcon><DeleteOutlineRoundedIcon fontSize="small"/></ListItemIcon>
+                    <ListItemText>{t('deletePage')}</ListItemText>
+                </MenuItem>
             </Menu>
+
+            <Dialog open={confirmDeleteOpen} onClose={() => setConfirmDeleteOpen(false)} maxWidth="xs" fullWidth>
+                <DialogTitle>{t('deletePageConfirmTitle')}</DialogTitle>
+                <DialogContent>
+                    <DialogContentText>{t('deletePageConfirmBody', {name: title})}</DialogContentText>
+                    {page.mainRoute && (
+                        <DialogContentText sx={{mt: 1.5}}>{t('deletePageRouteFallback')}</DialogContentText>
+                    )}
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setConfirmDeleteOpen(false)}>{t('cancel')}</Button>
+                    <Button onClick={handleDeletePage} color="error" variant="contained" data-testid="confirm-delete-page">
+                        {t('deletePage')}
+                    </Button>
+                </DialogActions>
+            </Dialog>
 
             <AddWidgetDialog pageId={pageId} open={addWidgetOpen} onClose={() => setAddWidgetOpen(false)}/>
             <PageSettingsDialog page={page} open={settingsOpen} onClose={() => setSettingsOpen(false)}/>

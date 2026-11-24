@@ -15,7 +15,7 @@ import React, {createContext, useContext} from "react";
  * Navbar owns the slot element and publishes it here; PageToolbar portals into
  * it. Going through a portal (rather than having Navbar resolve the active page
  * from the route) keeps route→pageId knowledge in the page components, which is
- * what makes `/custom-page/?id=` and lane-view's `leading` prop keep working.
+ * what makes `/dashboard/?name=` and lane-view's `leading` prop keep working.
  *
  * The value is null on the very first render, before Navbar's ref callback has
  * run; consumers render nothing until it is set.

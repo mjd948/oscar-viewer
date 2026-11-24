@@ -917,8 +917,8 @@
   "rs350SpectrumOnly": "{lane} no es un carril RS-350; los espectros solo se muestran para detectores RS-350.",
   "openFullPage": "Abrir página completa",
   "selectEventForDetails": "Seleccione un evento en una tabla de alarmas o eventos de esta página para ver sus detalles aquí.",
-  "editableMainPages": "Páginas principales editables",
-  "editableMainPagesHelp": "Activado: las páginas principales de arriba son páginas de widgets editables (Editar diseño, Restablecer). Desactivado: las páginas originales de ORNL. Se guarda en este navegador.",
-  "mainPageNameFixed": "Los nombres de las páginas integradas siguen el idioma configurado.",
+  "deletePageConfirmTitle": "¿Eliminar el panel?",
+  "deletePageConfirmBody": "“{name}” y su diseño se eliminarán de este navegador. No se puede deshacer.",
+  "deletePageRouteFallback": "Los enlaces que lo abrían, como hacer clic en un carril o en una notificación de alarma, abrirán la página original de ORNL. Un panel nuevo creado con el mismo diseño los recupera.",
   "rs350LaneView": "Vista de carril RS-350"
 }

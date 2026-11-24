@@ -18,9 +18,6 @@ import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
-import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
-import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
-import LocationOnRoundedIcon from '@mui/icons-material/LocationOnRounded';
 import CloudRoundedIcon from '@mui/icons-material/CloudRounded';
 import ManageAccountsRoundedIcon from '@mui/icons-material/ManageAccountsRounded';
 import UsbRoundedIcon from '@mui/icons-material/UsbRounded';
@@ -29,8 +26,6 @@ import NotificationsRoundedIcon from '@mui/icons-material/NotificationsRounded';
 import NotificationsOffIcon from '@mui/icons-material/NotificationsOff';
 import SettingsIcon from '@mui/icons-material/Settings';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
-import MediationIcon from '@mui/icons-material/Mediation';
-import MonitorHeartRoundedIcon from '@mui/icons-material/MonitorHeartRounded';
 import {
     Alert,
     Badge,
@@ -50,7 +45,7 @@ import {
     Tooltip,
 } from '@mui/material';
 import Link from 'next/link';
-import {Download, InsertChart, VolumeDown, VolumeUp} from "@mui/icons-material";
+import {Download, VolumeDown, VolumeUp} from "@mui/icons-material";
 import AlarmAudio, { applyAlarmAudioVolume } from "@/app/_components/AlarmAudio";
 import {
     selectAlarmAudioVolume,
@@ -63,10 +58,9 @@ import {
 import {useDispatch, useSelector} from "react-redux";
 import {useTheme} from "@mui/material/styles";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
-import {selectMainPagesMode, selectNavPages, setMainPagesMode} from "@/lib/state/PageLayoutSlice";
+import {selectNavPages, selectPages} from "@/lib/state/PageLayoutSlice";
 import {selectCurrentLane} from "@/lib/state/LaneViewSlice";
-import {customPageHref, mainPageForRoute, normalizeRoute} from "@/lib/layout/MainPages";
-import DashboardCustomizeRoundedIcon from "@mui/icons-material/DashboardCustomizeRounded";
+import {dashboardHref, LANE_VIEW_ROUTE, navTestId, normalizeRoute, pageForRoute, pageTitle} from "@/lib/layout/MainPages";
 import {PageConfig} from "@/lib/layout/PageConfigTypes";
 import {getPageIcon} from "@/app/_components/layout/WidgetRegistry";
 import AddPageDialog from "@/app/_components/layout/AddPageDialog";
@@ -78,7 +72,6 @@ import { usePathname, useRouter } from 'next/navigation';
 import {setEventPreview, setSelectedRowId} from "@/lib/state/EventPreviewSlice";
 import {selectDashboardUnreadAlarmCount, setSelectedEvent} from "@/lib/state/EventDataSlice";
 import {setEventData} from "@/lib/state/EventDetailsSlice";
-import QrCodeScannerRoundedIcon from '@mui/icons-material/QrCodeScannerRounded';
 import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {buildEventDetailsHref} from "@/lib/data/oscar/EventLookup";
 import {
@@ -242,30 +235,27 @@ export default function Navbar({children}: { children: React.ReactNode }) {
         },
         [pathname, router, setActiveView],
     );
-    // Custom widget pages (user-built; ORNL's own pages stay in menuItems) and the app-bar slot
-    // their PageToolbar portals into.
+    // The sidebar's dashboards (built-in and the user's own widget pages).
     const navPages = useSelector(selectNavPages);
+    const allPages = useSelector(selectPages);
 
-    // "Editable main pages" (default on, per browser): ORNL's main routes open the built-in
-    // editable widget pages instead (MainPages.ts). Lane View picks the RS-350 layout for RS-350
-    // lanes, as ORNL's own Lane View does.
-    const editableMainPages = useSelector(selectMainPagesMode) === 'widget';
+    // ORNL's main routes open the dashboard that holds them (MainPages.ts); when the user deleted
+    // it, ORNL's own page renders. Lane View picks the RS-350 layout for RS-350 lanes, as ORNL's
+    // own Lane View does.
     const currentLaneName = useSelector(selectCurrentLane);
     const laneMapReadyForNav = dataSourceCtx?.laneMapReady ?? false;
+    const isLaneViewRoute = normalizeRoute(pathname) === LANE_VIEW_ROUTE;
+    // Which Lane View layout fits is only known once the lane map has loaded (a map popup reloads).
+    const awaitingLaneType = isLaneViewRoute && !laneMapReadyForNav
+        && allPages.some((p) => p.mainRoute === LANE_VIEW_ROUTE);
     const currentLaneIsRs350 = Boolean(
         currentLaneName && dataSourceCtx?.laneMapRef?.current?.get(currentLaneName)?.isRS350Backpack);
-    const mainRouteHref = (route: string): string => {
-        if (!editableMainPages) return route;
-        const spec = mainPageForRoute(route, currentLaneIsRs350);
-        return spec ? customPageHref(spec.id) : route;
-    };
-    const mainPageRedirect = editableMainPages ? mainPageForRoute(pathname, currentLaneIsRs350) : undefined;
-    // Which Lane View layout fits is only known once the lane map has loaded (a map popup reloads).
-    const awaitingLaneType = Boolean(mainPageRedirect) && normalizeRoute(pathname) === '/lane-view' && !laneMapReadyForNav;
+    const routePage = awaitingLaneType ? undefined : pageForRoute(allPages, pathname, currentLaneIsRs350);
+    const routeRedirectHref = routePage ? dashboardHref(routePage) : undefined;
     React.useEffect(() => {
-        if (!mainPageRedirect || awaitingLaneType) return;
-        router.replace(scopedHref(customPageHref(mainPageRedirect.id)));
-    }, [mainPageRedirect, awaitingLaneType, router, scopedHref]);
+        if (routeRedirectHref) router.replace(scopedHref(routeRedirectHref));
+    }, [routeRedirectHref, router, scopedHref]);
+    const mainPageRedirect = awaitingLaneType || Boolean(routeRedirectHref);
 
     const [addPageOpen, setAddPageOpen] = useState(false);
     const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
@@ -486,52 +476,6 @@ export default function Navbar({children}: { children: React.ReactNode }) {
         dispatch(setAlarmAudioVolume(volume));
     };
 
-    // Menu items for drawer
-    const menuItems = [
-        {
-            title: t('dashboard'),
-            icon: <DashboardRoundedIcon/>,
-            href: mainRouteHref("/"),
-            testId: "nav-item-dashboard",
-        },
-        {
-            title: t('events'),
-            icon: <WarningRoundedIcon/>,
-            href: mainRouteHref("/event-log"),
-            testId: "nav-item-events",
-        },
-        {
-            title: t('stateOfHealth'),
-            icon: <MonitorHeartRoundedIcon/>,
-            href: mainRouteHref("/health/"),
-            testId: "nav-item-health",
-        },
-        {
-            title: t('map'),
-            icon: <LocationOnRoundedIcon/>,
-            href: mainRouteHref("/map"),
-            testId: "nav-item-map",
-        },
-        {
-            title: t('national'),
-            icon: <MediationIcon/>,
-            href: mainRouteHref("/national-view"),
-            testId: "nav-item-national",
-        },
-        {
-            title: t('reportGenerator'),
-            icon: <InsertChart/>,
-            href: mainRouteHref("/report"),
-            testId: "nav-item-report",
-        },
-        {
-            title: t('alarmTransfer'),
-            icon: <QrCodeScannerRoundedIcon/>,
-            href: mainRouteHref("/alarm-transfer"),
-            testId: "nav-item-alarm-transfer",
-        },
-    ]
-
     // Settings items for drawer
     const settingsItems = [
         {
@@ -573,43 +517,19 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                 </IconButton>
             </DrawerHeader>
             <Divider/>
-            <List>
-                {menuItems.map((item) => (
-                    <Link href={scopedHref(item.href)} prefetch={false} passHref key={item.title} onClick={!isDesktop ? handleDrawerClose : null}>
-                        <ListItem disablePadding sx={{display: 'block'}}>
-                            <ListItemButton
-                                data-testid={item.testId}
-                                sx={{
-                                    minHeight: 48,
-                                    justifyContent: drawerOpen ? 'initial' : 'center',
-                                    px: 2.5,
-                                }}
-                            >
-                                <ListItemIcon
-                                    sx={{
-                                        minWidth: 0,
-                                        mr: drawerOpen ? 2 : 'auto',
-                                        justifyContent: 'center',
-                                    }}
-                                >
-                                    {item.icon}
-                                </ListItemIcon>
-                                <ListItemText primary={item.title} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
-                            </ListItemButton>
-                        </ListItem>
-                    </Link>
-                ))}
-            </List>
-            <Divider/>
+            {/* Dashboards: every widget dashboard, built-in and the user's own, then Add. */}
             <List data-testid="custom-pages-nav">
                 {navPages.map((page: PageConfig) => (
-                    <Link href={scopedHref(`/custom-page/?id=${page.id}`)} passHref key={page.id} onClick={!isDesktop ? handleDrawerClose : null}>
+                    <Link href={scopedHref(dashboardHref(page))} prefetch={false} passHref key={page.id} onClick={!isDesktop ? handleDrawerClose : null}>
                         <ListItem disablePadding sx={{display: 'block'}}>
-                            <ListItemButton sx={{minHeight: 48, justifyContent: drawerOpen ? 'initial' : 'center', px: 2.5}}>
+                            <ListItemButton
+                                data-testid={navTestId(page)}
+                                sx={{minHeight: 48, justifyContent: drawerOpen ? 'initial' : 'center', px: 2.5}}
+                            >
                                 <ListItemIcon sx={{minWidth: 0, mr: drawerOpen ? 2 : 'auto', justifyContent: 'center'}}>
                                     {getPageIcon(page.icon)}
                                 </ListItemIcon>
-                                <ListItemText primary={page.title} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
+                                <ListItemText primary={pageTitle(page, t)} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
                             </ListItemButton>
                         </ListItem>
                     </Link>
@@ -625,25 +545,6 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                         </ListItemIcon>
                         <ListItemText primary={t('addPage')} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
                     </ListItemButton>
-                </ListItem>
-                <ListItem disablePadding sx={{display: 'block'}}>
-                    <Tooltip title={t('editableMainPagesHelp')} placement="right">
-                        <ListItemButton
-                            onClick={() => dispatch(setMainPagesMode(editableMainPages ? 'ornl' : 'widget'))}
-                            data-testid="editable-main-pages-toggle"
-                            aria-pressed={editableMainPages}
-                            sx={{minHeight: 48, justifyContent: drawerOpen ? 'initial' : 'center', px: 2.5}}
-                        >
-                            <ListItemIcon sx={{minWidth: 0, mr: drawerOpen ? 2 : 'auto', justifyContent: 'center'}}>
-                                <DashboardCustomizeRoundedIcon color={editableMainPages ? 'primary' : 'inherit'}/>
-                            </ListItemIcon>
-                            <ListItemText primary={t('editableMainPages')} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
-                            {drawerOpen && (
-                                <Switch edge="end" size="small" checked={editableMainPages} tabIndex={-1}
-                                        inputProps={{'aria-label': t('editableMainPages')}}/>
-                            )}
-                        </ListItemButton>
-                    </Tooltip>
                 </ListItem>
             </List>
             <Divider/>
@@ -1137,7 +1038,7 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                                 />
                             </div>
                         ) : mainPageRedirect ? (
-                            // Never mount ORNL's page while redirecting to its editable replacement.
+                            // Never mount ORNL's page while redirecting to the dashboard that holds its route.
                             <Box sx={{display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh'}}
                                  data-testid="main-page-redirecting">
                                 <CircularProgress/>
