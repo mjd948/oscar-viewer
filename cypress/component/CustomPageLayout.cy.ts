@@ -65,6 +65,16 @@ describe("custom widget pages on ORNL 3.11", () => {
         expect(state.pages.some((p) => p.id === "mine")).to.equal(false);
     });
 
+    it("Reset to default keeps a main page a main page", () => {
+        let state = reducer(undefined, {type: "@@init"});
+        state = {...state, pages: state.pages.map((p) => p.id === "main-map" ? {...p, widgets: [], layouts: {}} : p)};
+        state = reducer(state, resetPageToDefault("main-map"));
+        const map = state.pages.find((p) => p.id === "main-map")!;
+        expect(map.mainRoute).to.equal("/map");
+        expect(map.showInNav).to.equal(false);
+        expect(map.widgets.length).to.be.greaterThan(0);
+    });
+
     it("turns a legacy seeded page (schema 2) into an ordinary custom page", () => {
         const legacy = {
             ...buildPageFromTemplate("dashboard", {id: "dashboard", title: "dashboard"})!,

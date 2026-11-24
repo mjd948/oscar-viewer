@@ -145,7 +145,9 @@ export const Slice = createSlice({
             const page = state.pages[idx];
             if (!page?.templateId) return;
             const rebuilt = buildPageFromTemplate(page.templateId, page);
-            if (rebuilt) state.pages[idx] = rebuilt;
+            if (!rebuilt) return;
+            // A built-in main page stays one: keep its route marker and keep it out of the user's list.
+            state.pages[idx] = page.mainRoute ? {...rebuilt, mainRoute: page.mainRoute, showInNav: false} : rebuilt;
         },
         importPages: (state, action: PayloadAction<{ pages: PageConfig[]; mode: 'replace-all' | 'merge' }>) => {
             const {pages, mode} = action.payload;
