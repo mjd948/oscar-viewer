@@ -11,6 +11,7 @@ import eventDetailsReducer from "../../src/lib/state/EventDetailsSlice";
 import EventDetailsWidget from "../../src/app/_components/widgets/EventDetailsWidget";
 import RS350SpectrumWidget from "../../src/app/_components/widgets/RS350SpectrumWidget";
 import StateOfHealthWidget from "../../src/app/_components/widgets/StateOfHealthWidget";
+import VideoWidget from "../../src/app/_components/widgets/VideoWidget";
 import {PageConfig, WidgetInstance} from "../../src/lib/layout/PageConfigTypes";
 
 function harness(content: React.ReactNode, lanes: Map<string, any> = new Map(), ready: string[] = [...lanes.keys()]) {
@@ -73,5 +74,13 @@ describe("widgets for ORNL's remaining views", () => {
         cy.mount(harness(<StateOfHealthWidget page={page()} widget={health}/>));
         cy.get('[data-testid="state-of-health-widget"] h1').should("exist").and("not.be.visible");
         cy.get('[data-testid="state-of-health-widget"]').should("contain.text", "Live connection and fault status for eve");
+    });
+
+    it("video says there is no video for a camera-less lane instead of starting the player", () => {
+        const video: WidgetInstance = {id: "v", type: "video", config: {laneSource: {source: "page"}}};
+        const lanes = new Map<string, any>([["Patrol 1", {isRS350Backpack: true, controlStreams: []}]]);
+        cy.mount(harness(<VideoWidget page={page("Patrol 1")} widget={video}/>, lanes));
+        cy.get('[data-testid="video-widget-no-video"]').should("exist");
+        cy.get("video").should("not.exist");
     });
 });
