@@ -713,7 +713,7 @@ export async function exportSupportBundle(
 
     const oscarVersion = (backendSummary && typeof backendSummary.oscarVersion === "string")
         ? backendSummary.oscarVersion
-        : "3.11.10";
+        : "3.11.11";
 
     const combinedSummary: Record<string, unknown> = {
         schemaVersion: SUPPORT_DIAGNOSTICS_SCHEMA_VERSION,

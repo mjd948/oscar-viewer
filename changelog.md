@@ -1,6 +1,19 @@
 # OSCAR Viewer Change Log
 All notable changes to this project will be documented in this file. 
 
+## 3.11.11
+
+### Fixed
+
+- Fixed Event Log (`/event-log`) and Event Table pagination failures under multi-lane live MQTT traffic where repeatedly pressing `Previous (<)` stalled and returned `HTTP 503` (`DuckDB session capacity is busy for operation cold-query`):
+  - Attached bounded `phenomenonTime` (`[start - 2s, end + 5s]`) to exact `startTime` / `endTime` observation lookups (`EventLookup.ts`, `SharedOccupancy.ts`, `BulkAdjudication.ts`, `EventPreview.tsx`, `AdjudicationDetail.tsx`) so `OscarTieredObsStore` prunes Cold Parquet and evaluates only PostgreSQL hot storage.
+  - Suppressed background `resolveIdentityAndNotify` polling on historical pages (`page >= 1`) when browser notifications are inactive (`EventTable.tsx`).
+  - Added a bounded 64-page visited-page LRU cache (`0 ms` render with zero server queries on visited `Previous` / `Next` clicks), directional `page - 1` backward prefetch, abort-aware `HTTP 502/503/504` backoff retries, `250 ms` rapid-click debounce coalescing, and non-destructive row preservation on fetch failure (`EventTableRequests.ts`).
+
+### Changed
+
+- Synchronized operator quick-guide titles, support-bundle fallback metadata, System Update fallback version (`3.11.11`), Video Guide `#31` summary asset names, and hardware-replacement recovery checklist references with **OSCAR 3.11.11**.
+
 ## 3.11.10
 
 ### Fixed

@@ -1035,4 +1035,190 @@ describe("DataSourceProvider lane-map deduplication and EventTable request cance
             expect(rowCalls[2].offset).to.equal(28);
         });
     });
+
+    it("serves visited pages instantly on repeated Previous clicks, prefetches page - 1 when stepping backward from a deep page, and preserves visible rows on error", () => {
+        const rowCalls: Array<{offset: number; limit: number}> = [];
+        let forcePermanentFailure = false;
+
+        cy.window().then((win) => {
+            cy.stub(win, "fetch").callsFake((input: RequestInfo | URL) => {
+                const url = String(input);
+                if (url.includes("/observations/count?")) {
+                    return Promise.resolve(new Response(JSON.stringify({count: 300}), {
+                        status: 200,
+                        headers: {"Content-Type": "application/json"},
+                    }));
+                }
+                if (forcePermanentFailure) {
+                    return Promise.resolve(new Response("Unavailable", {status: 500}));
+                }
+                const parsed = new URL(url);
+                const offset = Number(parsed.searchParams.get("offset") ?? "0");
+                const limit = Number(parsed.searchParams.get("limit") ?? "15");
+                rowCalls.push({offset, limit});
+                return Promise.resolve(new Response(JSON.stringify({
+                    items: Array.from({length: limit}, (_, i) => ({
+                        id: `obs-${offset + i}`,
+                        laneName: `Lane-Row-${offset + i}`,
+                        startTime: "2026-11-15T12:00:00.000Z",
+                        endTime: "2026-11-15T12:00:05.000Z",
+                        maxGamma: 400,
+                        maxNeutron: 1,
+                    })),
+                }), {
+                    status: 200,
+                    headers: {"Content-Type": "application/json"},
+                }));
+            });
+        });
+
+        const fakeNode: any = {
+            id: "node-prev",
+            name: "Local Node",
+            getConnectedSystemsEndpoint: () => "https://node.example/sensorhub/api",
+            getBasicAuthHeader: () => ({}),
+            getObservationsApi: async () => ({
+                searchObservations: async (filter: any, pageSize: number, pageOffset: number) => ({
+                    url: "https://node.example/sensorhub/api/observations",
+                    filter,
+                    pageSize,
+                    pageOffset,
+                    headers: {},
+                    parseResponse: (payload: any) => payload?.items ?? [],
+                }),
+            }),
+        };
+
+        function BackwardPaginationHarness() {
+            const [page, setPage] = useState(0);
+            const queryPlans = useMemo<EventQueryPlan[]>(() => [{
+                key: "single-plan",
+                node: fakeNode,
+                datastreamIds: ["occ-1"],
+                filter: "gammaAlarm=true",
+            }], []);
+
+            const fetchPlanRows = useCallback(async (
+                plan: EventQueryPlan,
+                limit: number,
+                offset: number,
+                cutoff = "2026-11-15T12:00:00.000Z",
+                signal?: AbortSignal,
+            ) => {
+                const observationFilter = new ObservationFilter({
+                    dataStream: plan.datastreamIds,
+                    resultTime: `../${cutoff}`,
+                    filter: encodeURIComponent(plan.filter),
+                    order: "desc",
+                });
+                const api = await plan.node.getObservationsApi();
+                const collection = await api.searchObservations(observationFilter, limit, offset);
+                const items = await fetchCollectionDataWithSignal(collection, signal);
+                return items.map((item: any, idx: number) => new EventTableData(
+                    offset + idx + 1,
+                    item.laneName,
+                    {
+                        occupancyCount: offset + idx + 1,
+                        startTime: item.startTime,
+                        endTime: item.endTime,
+                        maxGamma: item.maxGamma,
+                        maxNeutron: item.maxNeutron,
+                        gammaAlarm: true,
+                        neutronAlarm: false,
+                        adjudicatedIds: [],
+                    },
+                    item.id,
+                    "foi-1",
+                    "Local Node",
+                    false,
+                ));
+            }, []);
+
+            const {rows, pageQueryError} = useAbortableEventQueries({
+                queryPlans,
+                pageQueryPlans: queryPlans,
+                page,
+                pageSize: 15,
+                pageLoadedTime: "2026-11-15T12:00:00.000Z",
+                prefetchNextPage: true,
+                fetchPlanRows,
+            });
+
+            return (
+                <div>
+                    <span data-testid="bw-page">{String(page)}</span>
+                    <span data-testid="bw-first">{rows[0]?.laneId ?? ""}</span>
+                    <span data-testid="bw-count">{String(rows.length)}</span>
+                    <span data-testid="bw-err">{String(pageQueryError)}</span>
+                    <button data-testid="bw-next" onClick={() => setPage(p => p + 1)}>Next</button>
+                    <button data-testid="bw-prev" onClick={() => setPage(p => Math.max(0, p - 1))}>Prev</button>
+                    <button data-testid="bw-jump-10" onClick={() => setPage(10)}>Jump 10</button>
+                </div>
+            );
+        }
+
+        cy.mount(<BackwardPaginationHarness />);
+        // Initial Page 0 transparently retries the transient 503 and renders + prefetches Page 1
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-0");
+        cy.get('[data-testid="bw-err"]').should("have.text", "false");
+        cy.wrap(null).should(() => {
+            expect(rowCalls.map(c => c.offset)).to.deep.equal([0, 15]);
+        });
+
+        // Step forward Page 0 -> 1 -> 2 -> 3
+        cy.get('[data-testid="bw-next"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-15");
+        cy.get('[data-testid="bw-next"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-30");
+        cy.get('[data-testid="bw-next"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-45");
+        cy.wrap(null).should(() => {
+            expect(rowCalls.some(c => c.offset === 60)).to.equal(true);
+        });
+
+        cy.then(() => {
+            rowCalls.length = 0;
+        });
+
+        // Repeatedly pressing Previous (Page 3 -> 2 -> 1) serves visited pages in 0ms with ZERO server row queries!
+        cy.get('[data-testid="bw-prev"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-30");
+        cy.get('[data-testid="bw-prev"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-15");
+        cy.then(() => {
+            expect(rowCalls).to.have.length(0);
+        });
+
+        // Jump to deep unvisited Page 10 (offset=150), then step Previous to Page 9 (offset=135) -> prefetches Page 8 (offset=120)!
+        cy.get('[data-testid="bw-jump-10"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-150");
+        cy.then(() => {
+            rowCalls.length = 0;
+        });
+        cy.get('[data-testid="bw-prev"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-135");
+        cy.wrap(null).should(() => {
+            expect(rowCalls.map(c => c.offset)).to.deep.equal([135, 120]);
+        });
+
+        // Stepping Previous again (Page 9 -> Page 8) serves prefetched Page 8 (offset=120) and chains prefetch of Page 7 (offset=105)
+        cy.get('[data-testid="bw-prev"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-120");
+        cy.wrap(null).should(() => {
+            expect(rowCalls.map(c => c.offset)).to.deep.equal([135, 120, 105]);
+        });
+
+        // Set permanent server failure: Page 7 still renders from chained prefetch (while Page 6 prefetch fails silently),
+        // and stepping Previous onto uncached Page 6 sets pageQueryError=true while preserving Page 7's 15 visible rows
+        cy.then(() => {
+            forcePermanentFailure = true;
+        });
+        cy.get('[data-testid="bw-prev"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-105");
+        cy.get('[data-testid="bw-err"]').should("have.text", "false");
+        cy.get('[data-testid="bw-prev"]').click();
+        cy.get('[data-testid="bw-err"]').should("have.text", "true");
+        cy.get('[data-testid="bw-count"]').should("have.text", "15");
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-105");
+    });
 });

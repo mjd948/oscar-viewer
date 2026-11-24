@@ -284,6 +284,9 @@ describe("event UUID lookup", () => {
                 "https://north.example/sensorhub/api/observations",
             );
             expect(requestUrl.searchParams.get("dataStream")).to.equal("occ-north");
+            expect(requestUrl.searchParams.get("phenomenonTime")).to.equal(
+                "2026-10-16T11:59:58.000Z/2026-10-16T12:00:10.000Z",
+            );
             expect(requestUrl.searchParams.get("filter")).to.equal(
                 "startTime='2026-10-16T12:00:00.000Z' AND endTime='2026-10-16T12:00:05.000Z'",
             );

@@ -692,10 +692,10 @@ export const VIDEO_GUIDES_CATALOG: readonly VideoGuideEntry[] = [
             el: 'Δημιουργία USB αυτόματης εγκατάστασης Ubuntu 24.04 εκτός δικτύου (GUI, TUI & CLI)',
         },
         {
-            en: 'Use the standalone oscar-3.11.10-autoinstall-usb-creator.zip on Windows 11 or Ubuntu—via Desktop GUI, interactive terminal TUI, or CLI—to combine ubuntu-24.04-live-server-amd64.iso, oscar-3.11.10-ubuntu-x86_64-offline-full.zip, a PBKDF2-hashed initial OSCAR web admin password, and lanes.csv with unattended first-boot setup.',
-            es: 'Use oscar-3.11.10-autoinstall-usb-creator.zip en Windows 11 o Ubuntu —mediante GUI de escritorio, TUI interactiva o CLI— para combinar el ISO de Ubuntu 24.04, offline-full.zip, contraseña web inicial admin con hash PBKDF2 y lanes.csv con auto-inicialización.',
-            fr: 'Utilisez oscar-3.11.10-autoinstall-usb-creator.zip sous Windows 11 ou Ubuntu — via GUI de bureau, TUI interactive ou CLI — pour assembler l’ISO Ubuntu 24.04, offline-full.zip, mot de passe web admin PBKDF2 et lanes.csv avec initialisation automatique.',
-            el: 'Χρησιμοποιήστε το oscar-3.11.10-autoinstall-usb-creator.zip σε Windows 11 ή Ubuntu — μέσω GUI, διαδραστικού TUI ή CLI — για συνδυασμό του ISO Ubuntu 24.04, του offline-full.zip, κωδικού web admin PBKDF2 και lanes.csv με αυτόματη αρχικοποίηση.',
+            en: 'Use the standalone oscar-3.11.11-autoinstall-usb-creator.zip on Windows 11 or Ubuntu—via Desktop GUI, interactive terminal TUI, or CLI—to combine ubuntu-24.04-live-server-amd64.iso, oscar-3.11.11-ubuntu-x86_64-offline-full.zip, a PBKDF2-hashed initial OSCAR web admin password, and lanes.csv with unattended first-boot setup.',
+            es: 'Use oscar-3.11.11-autoinstall-usb-creator.zip en Windows 11 o Ubuntu —mediante GUI de escritorio, TUI interactiva o CLI— para combinar el ISO de Ubuntu 24.04, offline-full.zip, contraseña web inicial admin con hash PBKDF2 y lanes.csv con auto-inicialización.',
+            fr: 'Utilisez oscar-3.11.11-autoinstall-usb-creator.zip sous Windows 11 ou Ubuntu — via GUI de bureau, TUI interactive ou CLI — pour assembler l’ISO Ubuntu 24.04, offline-full.zip, mot de passe web admin PBKDF2 et lanes.csv avec initialisation automatique.',
+            el: 'Χρησιμοποιήστε το oscar-3.11.11-autoinstall-usb-creator.zip σε Windows 11 ή Ubuntu — μέσω GUI, διαδραστικού TUI ή CLI — για συνδυασμό του ISO Ubuntu 24.04, του offline-full.zip, κωδικού web admin PBKDF2 και lanes.csv με αυτόματη αρχικοποίηση.',
         },
     ),
 ];
