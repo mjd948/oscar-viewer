@@ -129,7 +129,7 @@ export default function AddPageDialog({open, onClose}: AddPageDialogProps) {
                             ))}
                             {pages.map((p: PageConfig) => (
                                 <MenuItem key={p.id} value={p.id}>
-                                    {t('copyOf')} {p.title}
+                                    {t('copyOf')} {p.mainRoute ? t(p.title) : p.title}
                                 </MenuItem>
                             ))}
                         </Select>

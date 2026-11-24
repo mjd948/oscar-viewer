@@ -45,6 +45,7 @@ import {
     SelectChangeEvent,
     Slider,
     Stack,
+    CircularProgress,
     Switch,
     Tooltip,
 } from '@mui/material';
@@ -62,7 +63,10 @@ import {
 import {useDispatch, useSelector} from "react-redux";
 import {useTheme} from "@mui/material/styles";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
-import {selectNavPages} from "@/lib/state/PageLayoutSlice";
+import {selectMainPagesMode, selectNavPages, setMainPagesMode} from "@/lib/state/PageLayoutSlice";
+import {selectCurrentLane} from "@/lib/state/LaneViewSlice";
+import {customPageHref, mainPageForRoute, normalizeRoute} from "@/lib/layout/MainPages";
+import DashboardCustomizeRoundedIcon from "@mui/icons-material/DashboardCustomizeRounded";
 import {PageConfig} from "@/lib/layout/PageConfigTypes";
 import {getPageIcon} from "@/app/_components/layout/WidgetRegistry";
 import AddPageDialog from "@/app/_components/layout/AddPageDialog";
@@ -241,6 +245,28 @@ export default function Navbar({children}: { children: React.ReactNode }) {
     // Custom widget pages (user-built; ORNL's own pages stay in menuItems) and the app-bar slot
     // their PageToolbar portals into.
     const navPages = useSelector(selectNavPages);
+
+    // "Editable main pages" (default on, per browser): ORNL's main routes open the built-in
+    // editable widget pages instead (MainPages.ts). Lane View picks the RS-350 layout for RS-350
+    // lanes, as ORNL's own Lane View does.
+    const editableMainPages = useSelector(selectMainPagesMode) === 'widget';
+    const currentLaneName = useSelector(selectCurrentLane);
+    const laneMapReadyForNav = dataSourceCtx?.laneMapReady ?? false;
+    const currentLaneIsRs350 = Boolean(
+        currentLaneName && dataSourceCtx?.laneMapRef?.current?.get(currentLaneName)?.isRS350Backpack);
+    const mainRouteHref = (route: string): string => {
+        if (!editableMainPages) return route;
+        const spec = mainPageForRoute(route, currentLaneIsRs350);
+        return spec ? customPageHref(spec.id) : route;
+    };
+    const mainPageRedirect = editableMainPages ? mainPageForRoute(pathname, currentLaneIsRs350) : undefined;
+    // Which Lane View layout fits is only known once the lane map has loaded (a map popup reloads).
+    const awaitingLaneType = Boolean(mainPageRedirect) && normalizeRoute(pathname) === '/lane-view' && !laneMapReadyForNav;
+    React.useEffect(() => {
+        if (!mainPageRedirect || awaitingLaneType) return;
+        router.replace(scopedHref(customPageHref(mainPageRedirect.id)));
+    }, [mainPageRedirect, awaitingLaneType, router, scopedHref]);
+
     const [addPageOpen, setAddPageOpen] = useState(false);
     const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
     const isDarkMode = useTheme().palette.mode === 'dark';
@@ -465,43 +491,43 @@ export default function Navbar({children}: { children: React.ReactNode }) {
         {
             title: t('dashboard'),
             icon: <DashboardRoundedIcon/>,
-            href: "/",
+            href: mainRouteHref("/"),
             testId: "nav-item-dashboard",
         },
         {
             title: t('events'),
             icon: <WarningRoundedIcon/>,
-            href: "/event-log",
+            href: mainRouteHref("/event-log"),
             testId: "nav-item-events",
         },
         {
             title: t('stateOfHealth'),
             icon: <MonitorHeartRoundedIcon/>,
-            href: "/health/",
+            href: mainRouteHref("/health/"),
             testId: "nav-item-health",
         },
         {
             title: t('map'),
             icon: <LocationOnRoundedIcon/>,
-            href: "/map",
+            href: mainRouteHref("/map"),
             testId: "nav-item-map",
         },
         {
             title: t('national'),
             icon: <MediationIcon/>,
-            href: "/national-view",
+            href: mainRouteHref("/national-view"),
             testId: "nav-item-national",
         },
         {
             title: t('reportGenerator'),
             icon: <InsertChart/>,
-            href: "/report",
+            href: mainRouteHref("/report"),
             testId: "nav-item-report",
         },
         {
             title: t('alarmTransfer'),
             icon: <QrCodeScannerRoundedIcon/>,
-            href: "/alarm-transfer",
+            href: mainRouteHref("/alarm-transfer"),
             testId: "nav-item-alarm-transfer",
         },
     ]
@@ -599,6 +625,25 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                         </ListItemIcon>
                         <ListItemText primary={t('addPage')} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
                     </ListItemButton>
+                </ListItem>
+                <ListItem disablePadding sx={{display: 'block'}}>
+                    <Tooltip title={t('editableMainPagesHelp')} placement="right">
+                        <ListItemButton
+                            onClick={() => dispatch(setMainPagesMode(editableMainPages ? 'ornl' : 'widget'))}
+                            data-testid="editable-main-pages-toggle"
+                            aria-pressed={editableMainPages}
+                            sx={{minHeight: 48, justifyContent: drawerOpen ? 'initial' : 'center', px: 2.5}}
+                        >
+                            <ListItemIcon sx={{minWidth: 0, mr: drawerOpen ? 2 : 'auto', justifyContent: 'center'}}>
+                                <DashboardCustomizeRoundedIcon color={editableMainPages ? 'primary' : 'inherit'}/>
+                            </ListItemIcon>
+                            <ListItemText primary={t('editableMainPages')} sx={{opacity: drawerOpen ? 1 : 0, display: drawerOpen ? 'block' : 'none'}}/>
+                            {drawerOpen && (
+                                <Switch edge="end" size="small" checked={editableMainPages} tabIndex={-1}
+                                        inputProps={{'aria-label': t('editableMainPages')}}/>
+                            )}
+                        </ListItemButton>
+                    </Tooltip>
                 </ListItem>
             </List>
             <Divider/>
@@ -1091,6 +1136,12 @@ export default function Navbar({children}: { children: React.ReactNode }) {
                                     data-testid="sandbox-admin-iframe"
                                 />
                             </div>
+                        ) : mainPageRedirect ? (
+                            // Never mount ORNL's page while redirecting to its editable replacement.
+                            <Box sx={{display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh'}}
+                                 data-testid="main-page-redirecting">
+                                <CircularProgress/>
+                            </Box>
                         ) : (
                             children
                         )}

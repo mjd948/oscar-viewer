@@ -216,13 +216,45 @@ function buildTemplatePages(): PageConfig[] {
     const reportGenerator = singleView('report-generator', 'reportGenerator', 'report', 'report-generator', 54);
     const alarmTransfer = singleView('alarm-transfer', 'alarmTransfer', 'transfer', 'alarm-transfer', 42);
 
-    return [dashboard, eventLog, map, nationalView, laneView, stateOfHealth, reportGenerator, alarmTransfer];
+    // --- RS-350 Lane View: ORNL's Lane View shows its RS-350 view (spectra) for RS-350 lanes ---
+    const rsStatus = widget('rs350-lane-view-status', 'lane-detail-status', {laneSource: {source: 'page'}});
+    const rsSpectrum = widget('rs350-lane-view-spectrum', 'rs350-spectrum', {laneSource: {source: 'page'}});
+    const rsTable = widget('rs350-lane-view-status-table', 'status-table', {
+        laneSource: {source: 'page'}, defaultView: 'occupancy',
+    });
+    const rs350LaneView: PageConfig = {
+        id: 'rs350-lane-view',
+        title: 'rs350LaneView',
+        icon: 'lane',
+        showInNav: false,
+        laneContext: {mode: 'global'},
+        widgets: [rsStatus, rsSpectrum, rsTable],
+        layouts: {
+            lg: [
+                item(rsStatus.id, 'lane-detail-status', 0, 0, 12, 10),
+                item(rsSpectrum.id, 'rs350-spectrum', 0, 10, 12, 42),
+                item(rsTable.id, 'status-table', 0, 52, 12, 24),
+            ],
+            md: stacked('md', [
+                {i: rsStatus.id, type: 'lane-detail-status', h: 10},
+                {i: rsSpectrum.id, type: 'rs350-spectrum', h: 48},
+                {i: rsTable.id, type: 'status-table', h: 24},
+            ]),
+            sm: stacked('sm', [
+                {i: rsStatus.id, type: 'lane-detail-status', h: 10},
+                {i: rsSpectrum.id, type: 'rs350-spectrum', h: 60},
+                {i: rsTable.id, type: 'status-table', h: 24},
+            ]),
+        },
+    };
+
+    return [dashboard, eventLog, map, nationalView, laneView, stateOfHealth, reportGenerator, alarmTransfer, rs350LaneView];
 }
 
 /** Template ids offered when creating a page, in display order (i18n key = title). */
 export const PAGE_TEMPLATE_IDS = [
     'dashboard', 'lane-view', 'map', 'national-view', 'event-log',
-    'state-of-health', 'report-generator', 'alarm-transfer',
+    'state-of-health', 'report-generator', 'alarm-transfer', 'rs350-lane-view',
 ] as const;
 export type PageTemplateId = typeof PAGE_TEMPLATE_IDS[number];
 

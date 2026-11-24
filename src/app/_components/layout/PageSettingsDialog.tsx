@@ -63,10 +63,13 @@ export default function PageSettingsDialog({page, open, onClose}: PageSettingsDi
                 <Stack spacing={2} sx={{pt: 1}}>
                     <TextField
                         label={t('pageName')}
-                        value={name}
+                        value={page.mainRoute ? t(page.title) : name}
                         onChange={(e) => setName(e.target.value)}
                         size="small"
                         fullWidth
+                        // Built-in main pages keep their (translated) name.
+                        disabled={Boolean(page.mainRoute)}
+                        helperText={page.mainRoute ? t('mainPageNameFixed') : undefined}
                     />
                     <ToggleButtonGroup
                         value={icon}

@@ -916,5 +916,9 @@
   "rs350Spectrum": "Spectres RS-350",
   "rs350SpectrumOnly": "{lane} n'est pas une voie RS-350 ; les spectres ne sont affichés que pour les détecteurs RS-350.",
   "openFullPage": "Ouvrir la page complète",
-  "selectEventForDetails": "Sélectionnez un événement dans un tableau d'alarmes ou d'événements de cette page pour en voir les détails ici."
+  "selectEventForDetails": "Sélectionnez un événement dans un tableau d'alarmes ou d'événements de cette page pour en voir les détails ici.",
+  "editableMainPages": "Pages principales modifiables",
+  "editableMainPagesHelp": "Activé : les pages principales ci-dessus sont des pages de widgets modifiables (Modifier la disposition, Réinitialiser). Désactivé : les pages d'origine d'ORNL. Enregistré dans ce navigateur.",
+  "mainPageNameFixed": "Les noms des pages intégrées suivent la langue choisie.",
+  "rs350LaneView": "Vue de voie RS-350"
 }

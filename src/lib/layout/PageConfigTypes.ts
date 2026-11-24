@@ -276,6 +276,12 @@ export interface PageConfig {
     seededRoute?: string;
     /** Template the page was created from; "Reset to default" rebuilds it from that template. */
     templateId?: string;
+    /**
+     * Built-in editable replacement for one of ORNL's main routes (e.g. '/', '/event-log'). Such a
+     * page cannot be deleted, its title is an i18n key, and it is listed in the main menu rather
+     * than with the user's own pages. See MainPages.ts.
+     */
+    mainRoute?: string;
     /** Hide from the nav drawer (e.g. lane-view is reached by clicking a lane). */
     showInNav?: boolean;
     /** Page-level lane parameter for widgets with laneSource {source:'page'}. */
@@ -295,7 +301,14 @@ export interface PageLayoutState {
     removedSeededPageIds: string[];
     /** Page currently in edit mode; transient. */
     editModePageId: string | null;
+    /**
+     * 'widget' (default): ORNL's main routes open the built-in editable pages. 'ornl': ORNL's
+     * original pages. Per browser (persisted with the pages).
+     */
+    mainPagesMode?: MainPagesMode;
 }
+
+export type MainPagesMode = 'widget' | 'ornl';
 
 /** On-disk JSON file format for export/import. */
 export interface ExportedConfig {

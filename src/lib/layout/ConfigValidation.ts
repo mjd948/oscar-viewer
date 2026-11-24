@@ -13,6 +13,7 @@ import {
     WidgetType,
 } from './PageConfigTypes';
 import {LEGACY_SEEDED_TITLES} from './DefaultPages';
+import {DEFAULT_MAIN_PAGES_MODE, ensureMainPages} from './MainPages';
 
 export type ValidationResult =
     | { ok: true; value: ExportedConfig }
@@ -174,9 +175,10 @@ export function migratePages(pages: PageConfig[], fromVersion: number): PageConf
 export function rehydratePageLayoutState(inbound: unknown): PageLayoutState {
     const fallback: PageLayoutState = {
         schemaVersion: PAGE_CONFIG_SCHEMA_VERSION,
-        pages: [],
+        pages: ensureMainPages([]),
         removedSeededPageIds: [],
         editModePageId: null,
+        mainPagesMode: DEFAULT_MAIN_PAGES_MODE,
     };
     if (!isObject(inbound) || !Array.isArray(inbound.pages)) return fallback;
 
@@ -194,8 +196,9 @@ export function rehydratePageLayoutState(inbound: unknown): PageLayoutState {
     const fromVersion = isFiniteNumber(inbound.schemaVersion) ? inbound.schemaVersion : 1;
     return {
         schemaVersion: PAGE_CONFIG_SCHEMA_VERSION,
-        pages: migratePages(validPages, fromVersion),
+        pages: ensureMainPages(migratePages(validPages, fromVersion)),
         removedSeededPageIds: [],
         editModePageId: null,
+        mainPagesMode: inbound.mainPagesMode === 'ornl' ? 'ornl' : DEFAULT_MAIN_PAGES_MODE,
     };
 }
