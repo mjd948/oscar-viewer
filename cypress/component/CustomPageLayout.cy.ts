@@ -14,14 +14,55 @@ import {
     PageConfig,
     WidgetType,
 } from "../../src/lib/layout/PageConfigTypes";
-import reducer, {addPage, resetPageToDefault} from "../../src/lib/state/PageLayoutSlice";
+import reducer, {addPage, importPages, removePage, resetPageToDefault, setMainPagesMode} from "../../src/lib/state/PageLayoutSlice";
+import {MAIN_PAGES, mainPageForRoute} from "../../src/lib/layout/MainPages";
 
 describe("custom widget pages on ORNL 3.11", () => {
-    it("starts with no pages and never re-seeds pages over ORNL's own routes", () => {
+    it("starts with the built-in editable main pages, kept out of the user's page list", () => {
         const initial = reducer(undefined, {type: "@@init"});
-        expect(initial.pages).to.deep.equal([]);
+        expect(initial.pages.map((p) => p.id)).to.deep.equal(MAIN_PAGES.map((m) => m.id));
+        expect(initial.mainPagesMode).to.equal("widget");
+        initial.pages.forEach((p) => {
+            expect(p.mainRoute, p.id).to.be.a("string");
+            expect(p.showInNav, p.id).to.equal(false);
+            expect(p.widgets.length, p.id).to.be.greaterThan(0);
+        });
         const rehydrated = rehydratePageLayoutState({schemaVersion: PAGE_CONFIG_SCHEMA_VERSION, pages: []});
-        expect(rehydrated.pages).to.deep.equal([]);
+        expect(rehydrated.pages.map((p) => p.id)).to.deep.equal(MAIN_PAGES.map((m) => m.id));
+    });
+
+    it("maps ORNL's main routes to their editable pages", () => {
+        expect(mainPageForRoute("/")?.id).to.equal("main-dashboard");
+        expect(mainPageForRoute("/health/")?.id).to.equal("main-health");
+        expect(mainPageForRoute("/event-log")?.id).to.equal("main-event-log");
+        expect(mainPageForRoute("/lane-view")?.id).to.equal("main-lane-view");
+        expect(mainPageForRoute("/lane-view/", true)?.id).to.equal("main-rs350-lane-view");
+        expect(mainPageForRoute("/event-details")).to.equal(undefined);
+        expect(mainPageForRoute("/users")).to.equal(undefined);
+        expect(mainPageForRoute("/custom-page/")).to.equal(undefined);
+    });
+
+    it("keeps user pages, edited main pages and the chosen mode across a reload", () => {
+        const mine = buildPageFromTemplate("map", {id: "mine", title: "My map"})!;
+        let state = reducer(undefined, addPage(mine));
+        const dash = state.pages.find((p) => p.id === "main-dashboard")!;
+        state = {...state, pages: state.pages.map((p) => p.id === "main-dashboard" ? {...dash, widgets: dash.widgets.slice(0, 1)} : p)};
+        state = reducer(state, setMainPagesMode("ornl"));
+        const reloaded = rehydratePageLayoutState(JSON.parse(JSON.stringify(state)));
+        expect(reloaded.mainPagesMode).to.equal("ornl");
+        expect(reloaded.pages.find((p) => p.id === "mine")?.title).to.equal("My map");
+        expect(reloaded.pages.find((p) => p.id === "main-dashboard")?.widgets.length).to.equal(1);
+        expect(reloaded.pages.filter((p) => p.mainRoute).length).to.equal(MAIN_PAGES.length);
+    });
+
+    it("never deletes a main page, and a replace-all import keeps them", () => {
+        let state = reducer(undefined, removePage("main-map"));
+        expect(state.pages.some((p) => p.id === "main-map")).to.equal(true);
+        const mine = buildPageFromTemplate("map", {id: "mine", title: "My map"})!;
+        state = reducer(state, importPages({pages: [mine], mode: "replace-all"}));
+        expect(state.pages.map((p) => p.id)).to.include.members(["mine", ...MAIN_PAGES.map((m) => m.id)]);
+        state = reducer(state, removePage("mine"));
+        expect(state.pages.some((p) => p.id === "mine")).to.equal(false);
     });
 
     it("turns a legacy seeded page (schema 2) into an ordinary custom page", () => {
@@ -48,11 +89,12 @@ describe("custom widget pages on ORNL 3.11", () => {
 
         const page = buildPageFromTemplate("lane-view", {id: "p1", title: "Lane wall", icon: "star"})!;
         let state = reducer(undefined, addPage(page));
-        state = {...state, pages: state.pages.map((p) => ({...p, widgets: [], layouts: {}}))};
+        state = {...state, pages: state.pages.map((p) => p.id === "p1" ? {...p, widgets: [], layouts: {}} : p)};
         state = reducer(state, resetPageToDefault("p1"));
-        expect(state.pages[0].title).to.equal("Lane wall");
-        expect(state.pages[0].icon).to.equal("star");
-        expect(state.pages[0].widgets.length).to.equal(page.widgets.length);
+        const reset = state.pages.find((p) => p.id === "p1")!;
+        expect(reset.title).to.equal("Lane wall");
+        expect(reset.icon).to.equal("star");
+        expect(reset.widgets.length).to.equal(page.widgets.length);
     });
 
     it("offers a template for every ORNL view and keeps every template valid", () => {
@@ -69,7 +111,7 @@ describe("custom widget pages on ORNL 3.11", () => {
         // Validation drops a whole page with an unknown widget type: every template must survive it.
         const pages = PAGE_TEMPLATE_IDS.map((id) => buildPageFromTemplate(id, {id: `v-${id}`, title: id})!);
         const rehydrated = rehydratePageLayoutState({schemaVersion: PAGE_CONFIG_SCHEMA_VERSION, pages});
-        expect(rehydrated.pages.map((p) => p.id)).to.deep.equal(pages.map((p) => p.id));
+        expect(rehydrated.pages.map((p) => p.id)).to.include.members(pages.map((p) => p.id));
         ["state-of-health", "report-generator", "alarm-transfer", "event-details", "event-lookup", "rs350-spectrum"]
             .forEach((type) => {
                 expect(KNOWN_WIDGET_TYPES, type).to.include(type);

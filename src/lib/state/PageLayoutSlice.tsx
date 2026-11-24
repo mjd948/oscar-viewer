@@ -11,6 +11,7 @@ import {
     PAGE_CONFIG_SCHEMA_VERSION,
     PageConfig,
     PageLaneContext,
+    MainPagesMode,
     PageLayoutState,
     RGL_COLS,
     RGLBreakpoint,
@@ -20,12 +21,15 @@ import {
 } from "@/lib/layout/PageConfigTypes";
 import {buildPageFromTemplate} from "@/lib/layout/DefaultPages";
 import {rehydratePageLayoutState} from "@/lib/layout/ConfigValidation";
+import {DEFAULT_MAIN_PAGES_MODE, ensureMainPages, isMainPage} from "@/lib/layout/MainPages";
 
 const initialState: PageLayoutState = {
     schemaVersion: PAGE_CONFIG_SCHEMA_VERSION,
-    pages: [],
+    // ORNL's main routes open these built-in editable pages (see MainPages.ts).
+    pages: ensureMainPages([]),
     removedSeededPageIds: [],
     editModePageId: null,
+    mainPagesMode: DEFAULT_MAIN_PAGES_MODE,
 };
 
 function findPage(state: PageLayoutState, pageId: string): PageConfig | undefined {
@@ -62,6 +66,8 @@ export const Slice = createSlice({
             state.pages.push(action.payload);
         },
         removePage: (state, action: PayloadAction<string>) => {
+            // Built-in main pages can be reset, not deleted.
+            if (isMainPage(findPage(state, action.payload))) return;
             state.pages = state.pages.filter((p) => p.id !== action.payload);
             if (state.editModePageId === action.payload) state.editModePageId = null;
         },
@@ -127,6 +133,10 @@ export const Slice = createSlice({
             });
             page.layouts = cleaned;
         },
+        setMainPagesMode: (state, action: PayloadAction<MainPagesMode>) => {
+            state.mainPagesMode = action.payload;
+            state.editModePageId = null;
+        },
         setEditMode: (state, action: PayloadAction<string | null>) => {
             state.editModePageId = action.payload;
         },
@@ -140,7 +150,7 @@ export const Slice = createSlice({
         importPages: (state, action: PayloadAction<{ pages: PageConfig[]; mode: 'replace-all' | 'merge' }>) => {
             const {pages, mode} = action.payload;
             if (mode === 'replace-all') {
-                state.pages = pages;
+                state.pages = ensureMainPages(pages);
             } else {
                 const existingTitles = new Set(state.pages.map((p) => p.title));
                 for (const incoming of pages) {
@@ -192,6 +202,7 @@ export const {
     setEditMode,
     resetPageToDefault,
     importPages,
+    setMainPagesMode,
 } = Slice.actions;
 
 export const selectPages = (state: RootState) => state.pageLayoutSlice.pages;
@@ -200,5 +211,7 @@ export const selectNavPages = (state: RootState) =>
 export const selectPageById = (pageId: string) => (state: RootState) =>
     state.pageLayoutSlice.pages.find((p: PageConfig) => p.id === pageId);
 export const selectEditModePageId = (state: RootState) => state.pageLayoutSlice.editModePageId;
+export const selectMainPagesMode = (state: RootState): MainPagesMode =>
+    state.pageLayoutSlice.mainPagesMode === 'ornl' ? 'ornl' : DEFAULT_MAIN_PAGES_MODE;
 
 export default Slice.reducer;

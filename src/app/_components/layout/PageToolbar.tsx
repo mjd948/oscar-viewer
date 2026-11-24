@@ -5,7 +5,7 @@
  * All Rights Reserved
  */
 
-import React, {useState} from "react";
+import React, {useContext, useEffect, useState} from "react";
 import {createPortal} from "react-dom";
 import {
     Box,
@@ -43,11 +43,14 @@ import {
     removePage,
     resetPageToDefault,
     selectEditModePageId,
+    selectMainPagesMode,
     selectPageById,
     setEditMode,
     setPageLaneContext,
 } from "@/lib/state/PageLayoutSlice";
 import AddWidgetDialog from "./AddWidgetDialog";
+import {customPageHref, isMainPage, mainPageForRoute, mainPageSpec} from "@/lib/layout/MainPages";
+import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import PageSettingsDialog from "./PageSettingsDialog";
 import ImportExportDialog from "./ImportExportDialog";
 import {useHeaderSlot} from "./HeaderSlot";
@@ -77,6 +80,24 @@ export default function PageToolbar({pageId, leading}: PageToolbarProps) {
     const editMode = useSelector(selectEditModePageId) === pageId;
     const laneMap = useSelector((state: RootState) => selectLaneMap(state));
     const globalCurrentLane = useSelector(selectCurrentLane);
+    const mainPagesMode = useSelector(selectMainPagesMode);
+    const {laneMapRef, laneMapReady, scopedHref} = useContext(DataSourceContext);
+    const mainPage = isMainPage(page);
+    const laneIsRs350 = Boolean(globalCurrentLane && laneMapRef?.current?.get(globalCurrentLane)?.isRS350Backpack);
+
+    useEffect(() => {
+        if (!page?.mainRoute) return;
+        // Switch turned off: a built-in main page hands back to ORNL's own page.
+        if (mainPagesMode === 'ornl') {
+            router.replace(scopedHref(page.mainRoute));
+            return;
+        }
+        // Lane View: RS-350 lanes get the spectra layout, portal lanes the portal one.
+        if (mainPageSpec(page.id)?.route === '/lane-view' && laneMapReady && globalCurrentLane) {
+            const fitting = mainPageForRoute('/lane-view', laneIsRs350);
+            if (fitting && fitting.id !== page.id) router.replace(scopedHref(customPageHref(fitting.id)));
+        }
+    }, [page?.id, page?.mainRoute, mainPagesMode, laneMapReady, globalCurrentLane, laneIsRs350, router, scopedHref]);
 
     const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
     const [addWidgetOpen, setAddWidgetOpen] = useState(false);
@@ -85,7 +106,8 @@ export default function PageToolbar({pageId, leading}: PageToolbarProps) {
 
     if (!page) return null;
 
-    const title = page.title;
+    // Built-in main pages store an i18n key as their title, so they follow the language.
+    const title = mainPage ? t(page.title) : page.title;
     const hasTemplate = !!page.templateId;
 
     const laneNames: string[] = laneMap instanceof Map
@@ -216,11 +238,13 @@ export default function PageToolbar({pageId, leading}: PageToolbarProps) {
                         <ListItemText>{t('resetPage')}</ListItemText>
                     </MenuItem>
                 )}
-                <Divider/>
-                <MenuItem onClick={handleDeletePage}>
-                    <ListItemIcon><DeleteOutlineRoundedIcon fontSize="small"/></ListItemIcon>
-                    <ListItemText>{t('deletePage')}</ListItemText>
-                </MenuItem>
+                {!mainPage && <Divider/>}
+                {!mainPage && (
+                    <MenuItem onClick={handleDeletePage}>
+                        <ListItemIcon><DeleteOutlineRoundedIcon fontSize="small"/></ListItemIcon>
+                        <ListItemText>{t('deletePage')}</ListItemText>
+                    </MenuItem>
+                )}
             </Menu>
 
             <AddWidgetDialog pageId={pageId} open={addWidgetOpen} onClose={() => setAddWidgetOpen(false)}/>
