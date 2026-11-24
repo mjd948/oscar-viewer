@@ -5,7 +5,7 @@
  * All Rights Reserved
  */
 
-import React, {useState} from "react";
+import React, {useContext, useState} from "react";
 import {
     Button,
     Dialog,
@@ -28,6 +28,8 @@ import {useAppDispatch} from "@/lib/state/Hooks";
 import {LayoutItem, PageConfig, RGLBreakpoint} from "@/lib/layout/PageConfigTypes";
 import {addPage, selectPages} from "@/lib/state/PageLayoutSlice";
 import {buildPageFromTemplate, PAGE_TEMPLATE_IDS, templateTitleKey} from "@/lib/layout/DefaultPages";
+import {claimMainRoute, dashboardHref, pageTitle, uniqueSlugFor} from "@/lib/layout/MainPages";
+import {DataSourceContext} from "@/app/contexts/DataSourceContext";
 import {PAGE_ICONS} from "./WidgetRegistry";
 import {useLanguage} from "@/app/contexts/LanguageContext";
 
@@ -58,6 +60,7 @@ export default function AddPageDialog({open, onClose}: AddPageDialogProps) {
     const router = useRouter();
     const {t} = useLanguage();
     const pages = useSelector(selectPages);
+    const {scopedHref} = useContext(DataSourceContext);
 
     const [name, setName] = useState('');
     const [icon, setIcon] = useState('grid');
@@ -80,11 +83,13 @@ export default function AddPageDialog({open, onClose}: AddPageDialogProps) {
             page = {id, title: trimmed, icon, showInNav: true, ...contents};
         }
         if (!page) return;
+        // Same slug and route the reducer would give it, so the URL is known before dispatch.
+        page = claimMainRoute(pages, {...page, slug: uniqueSlugFor(page, pages)});
         dispatch(addPage(page));
         setName('');
         setTemplateId('blank');
         onClose();
-        router.push(`/custom-page/?id=${id}`);
+        router.push(scopedHref(dashboardHref(page)));
     };
 
     return (
@@ -129,7 +134,7 @@ export default function AddPageDialog({open, onClose}: AddPageDialogProps) {
                             ))}
                             {pages.map((p: PageConfig) => (
                                 <MenuItem key={p.id} value={p.id}>
-                                    {t('copyOf')} {p.mainRoute ? t(p.title) : p.title}
+                                    {t('copyOf')} {pageTitle(p, t)}
                                 </MenuItem>
                             ))}
                         </Select>

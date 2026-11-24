@@ -917,8 +917,8 @@
   "rs350SpectrumOnly": "{lane} is not an RS-350 lane; spectra are only shown for RS-350 detectors.",
   "openFullPage": "Open full page",
   "selectEventForDetails": "Select an event in an alarm or event table on this page to see its details here.",
-  "editableMainPages": "Editable main pages",
-  "editableMainPagesHelp": "On: the main pages above are editable widget pages (Edit Layout, Reset to default). Off: ORNL's original pages. Saved in this browser.",
-  "mainPageNameFixed": "Built-in page names follow the language setting.",
+  "deletePageConfirmTitle": "Delete dashboard?",
+  "deletePageConfirmBody": "“{name}” and its layout will be deleted from this browser. This can't be undone.",
+  "deletePageRouteFallback": "Links that opened it, such as clicking a lane or an alarm notification, will open ORNL's original page instead. A new dashboard made from the same layout takes them back.",
   "rs350LaneView": "RS-350 Lane View"
 }

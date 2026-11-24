@@ -3,7 +3,7 @@
  * All Rights Reserved
  */
 
-import {createSlice, PayloadAction} from "@reduxjs/toolkit";
+import {createSlice, current, PayloadAction} from "@reduxjs/toolkit";
 import {REHYDRATE} from "redux-persist";
 import {RootState} from "@/lib/state/Store";
 import {
@@ -11,7 +11,6 @@ import {
     PAGE_CONFIG_SCHEMA_VERSION,
     PageConfig,
     PageLaneContext,
-    MainPagesMode,
     PageLayoutState,
     RGL_COLS,
     RGLBreakpoint,
@@ -21,15 +20,14 @@ import {
 } from "@/lib/layout/PageConfigTypes";
 import {buildPageFromTemplate} from "@/lib/layout/DefaultPages";
 import {rehydratePageLayoutState} from "@/lib/layout/ConfigValidation";
-import {DEFAULT_MAIN_PAGES_MODE, ensureMainPages, isMainPage} from "@/lib/layout/MainPages";
+import {claimMainRoute, ensureMainPages, mainPageSpec, uniqueSlugFor, withSlugs} from "@/lib/layout/MainPages";
 
 const initialState: PageLayoutState = {
     schemaVersion: PAGE_CONFIG_SCHEMA_VERSION,
-    // ORNL's main routes open these built-in editable pages (see MainPages.ts).
+    // The built-in dashboards; ORNL's main routes open them (see MainPages.ts).
     pages: ensureMainPages([]),
     removedSeededPageIds: [],
     editModePageId: null,
-    mainPagesMode: DEFAULT_MAIN_PAGES_MODE,
 };
 
 function findPage(state: PageLayoutState, pageId: string): PageConfig | undefined {
@@ -63,17 +61,27 @@ export const Slice = createSlice({
     reducers: {
         addPage: (state, action: PayloadAction<PageConfig>) => {
             if (findPage(state, action.payload.id)) return;
-            state.pages.push(action.payload);
+            const pages = current(state).pages;
+            const page = claimMainRoute(pages, action.payload);
+            state.pages.push({...page, slug: page.slug ?? uniqueSlugFor(page, pages)});
         },
         removePage: (state, action: PayloadAction<string>) => {
-            // Built-in main pages can be reset, not deleted.
-            if (isMainPage(findPage(state, action.payload))) return;
-            state.pages = state.pages.filter((p) => p.id !== action.payload);
-            if (state.editModePageId === action.payload) state.editModePageId = null;
+            const pageId = action.payload;
+            if (!findPage(state, pageId)) return;
+            state.pages = state.pages.filter((p) => p.id !== pageId);
+            // A deleted built-in stays deleted: rehydrate must not re-seed it.
+            if (mainPageSpec(pageId) && !state.removedSeededPageIds.includes(pageId)) {
+                state.removedSeededPageIds.push(pageId);
+            }
+            if (state.editModePageId === pageId) state.editModePageId = null;
         },
         renamePage: (state, action: PayloadAction<{ pageId: string; title: string }>) => {
             const page = findPage(state, action.payload.pageId);
-            if (page) page.title = action.payload.title;
+            if (!page) return;
+            // A literal name from now on; the URL follows it.
+            page.title = action.payload.title;
+            page.i18nTitle = undefined;
+            page.slug = uniqueSlugFor({...current(page), title: page.title, i18nTitle: undefined}, current(state).pages);
         },
         setPageIcon: (state, action: PayloadAction<{ pageId: string; icon: string }>) => {
             const page = findPage(state, action.payload.pageId);
@@ -133,10 +141,6 @@ export const Slice = createSlice({
             });
             page.layouts = cleaned;
         },
-        setMainPagesMode: (state, action: PayloadAction<MainPagesMode>) => {
-            state.mainPagesMode = action.payload;
-            state.editModePageId = null;
-        },
         setEditMode: (state, action: PayloadAction<string | null>) => {
             state.editModePageId = action.payload;
         },
@@ -146,13 +150,17 @@ export const Slice = createSlice({
             if (!page?.templateId) return;
             const rebuilt = buildPageFromTemplate(page.templateId, page);
             if (!rebuilt) return;
-            // A built-in main page stays one: keep its route marker and keep it out of the user's list.
-            state.pages[idx] = page.mainRoute ? {...rebuilt, mainRoute: page.mainRoute, showInNav: false} : rebuilt;
+            // Only the layout resets: name, URL, route and sidebar listing stay as they are.
+            const {title, i18nTitle, slug, mainRoute, showInNav} = page;
+            state.pages[idx] = {...rebuilt, title, i18nTitle, slug, mainRoute, showInNav};
         },
         importPages: (state, action: PayloadAction<{ pages: PageConfig[]; mode: 'replace-all' | 'merge' }>) => {
             const {pages, mode} = action.payload;
+            // An imported built-in is no longer a deleted one.
+            const importedIds = new Set(pages.map((p) => p.id));
+            state.removedSeededPageIds = state.removedSeededPageIds.filter((id) => !importedIds.has(id));
             if (mode === 'replace-all') {
-                state.pages = ensureMainPages(pages);
+                state.pages = withSlugs(ensureMainPages(pages, current(state).removedSeededPageIds));
             } else {
                 const existingTitles = new Set(state.pages.map((p) => p.title));
                 for (const incoming of pages) {
@@ -170,6 +178,7 @@ export const Slice = createSlice({
                         state.pages.push(page);
                     }
                 }
+                state.pages = withSlugs(current(state).pages);
             }
             state.editModePageId = null;
         },
@@ -204,7 +213,6 @@ export const {
     setEditMode,
     resetPageToDefault,
     importPages,
-    setMainPagesMode,
 } = Slice.actions;
 
 export const selectPages = (state: RootState) => state.pageLayoutSlice.pages;
@@ -213,7 +221,5 @@ export const selectNavPages = (state: RootState) =>
 export const selectPageById = (pageId: string) => (state: RootState) =>
     state.pageLayoutSlice.pages.find((p: PageConfig) => p.id === pageId);
 export const selectEditModePageId = (state: RootState) => state.pageLayoutSlice.editModePageId;
-export const selectMainPagesMode = (state: RootState): MainPagesMode =>
-    state.pageLayoutSlice.mainPagesMode === 'ornl' ? 'ornl' : DEFAULT_MAIN_PAGES_MODE;
 
 export default Slice.reducer;

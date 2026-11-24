@@ -14,65 +14,159 @@ import {
     PageConfig,
     WidgetType,
 } from "../../src/lib/layout/PageConfigTypes";
-import reducer, {addPage, importPages, removePage, resetPageToDefault, setMainPagesMode} from "../../src/lib/state/PageLayoutSlice";
-import {MAIN_PAGES, mainPageForRoute} from "../../src/lib/layout/MainPages";
+import reducer, {addPage, importPages, removePage, renamePage, resetPageToDefault} from "../../src/lib/state/PageLayoutSlice";
+import {
+    claimMainRoute,
+    dashboardHref,
+    MAIN_PAGES,
+    navTestId,
+    pageForRoute,
+    pageTitle,
+    slugify,
+} from "../../src/lib/layout/MainPages";
+
+const MAIN_IDS = MAIN_PAGES.map((m) => m.id);
+const LANE_VIEW_IDS = ["main-lane-view", "main-rs350-lane-view"];
+const reload = (state: unknown) => rehydratePageLayoutState(JSON.parse(JSON.stringify(state)));
 
 describe("custom widget pages on ORNL 3.11", () => {
-    it("starts with the built-in editable main pages, kept out of the user's page list", () => {
+    it("starts with the built-in dashboards in the sidebar list (Lane Views reached by a lane click)", () => {
         const initial = reducer(undefined, {type: "@@init"});
-        expect(initial.pages.map((p) => p.id)).to.deep.equal(MAIN_PAGES.map((m) => m.id));
-        expect(initial.mainPagesMode).to.equal("widget");
+        expect(initial.pages.map((p) => p.id)).to.deep.equal(MAIN_IDS);
+        expect(initial).not.to.have.property("mainPagesMode");
         initial.pages.forEach((p) => {
             expect(p.mainRoute, p.id).to.be.a("string");
-            expect(p.showInNav, p.id).to.equal(false);
+            expect(p.i18nTitle, p.id).to.equal(true);
+            expect(p.slug, p.id).to.be.a("string");
+            expect(p.showInNav, p.id).to.equal(!LANE_VIEW_IDS.includes(p.id));
             expect(p.widgets.length, p.id).to.be.greaterThan(0);
         });
+        expect(initial.pages.map((p) => p.slug)).to.deep.equal([
+            "dashboard", "events", "state-of-health", "map", "national", "report-generator", "alarm-transfer",
+            "lane-view", "rs350-lane-view",
+        ]);
+        // The training coach spotlights the built-ins by their old menu test ids.
+        expect(navTestId(initial.pages[0])).to.equal("nav-item-dashboard");
+        expect(navTestId(initial.pages[2])).to.equal("nav-item-health");
         const rehydrated = rehydratePageLayoutState({schemaVersion: PAGE_CONFIG_SCHEMA_VERSION, pages: []});
-        expect(rehydrated.pages.map((p) => p.id)).to.deep.equal(MAIN_PAGES.map((m) => m.id));
+        expect(rehydrated.pages.map((p) => p.id)).to.deep.equal(MAIN_IDS);
     });
 
-    it("maps ORNL's main routes to their editable pages", () => {
-        expect(mainPageForRoute("/")?.id).to.equal("main-dashboard");
-        expect(mainPageForRoute("/health/")?.id).to.equal("main-health");
-        expect(mainPageForRoute("/event-log")?.id).to.equal("main-event-log");
-        expect(mainPageForRoute("/lane-view")?.id).to.equal("main-lane-view");
-        expect(mainPageForRoute("/lane-view/", true)?.id).to.equal("main-rs350-lane-view");
-        expect(mainPageForRoute("/event-details")).to.equal(undefined);
-        expect(mainPageForRoute("/users")).to.equal(undefined);
-        expect(mainPageForRoute("/custom-page/")).to.equal(undefined);
+    it("opens ORNL's main routes on the dashboard that holds them", () => {
+        const {pages} = reducer(undefined, {type: "@@init"});
+        expect(pageForRoute(pages, "/")?.id).to.equal("main-dashboard");
+        expect(pageForRoute(pages, "/health/")?.id).to.equal("main-health");
+        expect(pageForRoute(pages, "/event-log")?.id).to.equal("main-event-log");
+        expect(pageForRoute(pages, "/lane-view")?.id).to.equal("main-lane-view");
+        expect(pageForRoute(pages, "/lane-view/", true)?.id).to.equal("main-rs350-lane-view");
+        expect(pageForRoute(pages, "/event-details")).to.equal(undefined);
+        expect(pageForRoute(pages, "/users")).to.equal(undefined);
+        expect(pageForRoute(pages, "/dashboard/")).to.equal(undefined);
+        expect(dashboardHref(pages[2])).to.equal("/dashboard/?name=state-of-health");
     });
 
-    it("keeps user pages, edited main pages and the chosen mode across a reload", () => {
-        const mine = buildPageFromTemplate("map", {id: "mine", title: "My map"})!;
-        let state = reducer(undefined, addPage(mine));
-        const dash = state.pages.find((p) => p.id === "main-dashboard")!;
-        state = {...state, pages: state.pages.map((p) => p.id === "main-dashboard" ? {...dash, widgets: dash.widgets.slice(0, 1)} : p)};
-        state = reducer(state, setMainPagesMode("ornl"));
-        const reloaded = rehydratePageLayoutState(JSON.parse(JSON.stringify(state)));
-        expect(reloaded.mainPagesMode).to.equal("ornl");
-        expect(reloaded.pages.find((p) => p.id === "mine")?.title).to.equal("My map");
-        expect(reloaded.pages.find((p) => p.id === "main-dashboard")?.widgets.length).to.equal(1);
-        expect(reloaded.pages.filter((p) => p.mainRoute).length).to.equal(MAIN_PAGES.length);
-    });
+    it("deletes a built-in for good; its route goes back to ORNL until a page from its layout claims it", () => {
+        let state = reducer(undefined, removePage("main-event-log"));
+        state = reducer(state, removePage("main-rs350-lane-view"));
+        state = reducer(state, removePage("main-dashboard"));
+        expect(state.pages.map((p) => p.id)).not.to.include.members(["main-event-log", "main-dashboard"]);
+        expect(state.removedSeededPageIds).to.deep.equal(["main-event-log", "main-rs350-lane-view", "main-dashboard"]);
+        // ORNL's page renders for a route without a dashboard; home falls back to the first sidebar dashboard.
+        expect(pageForRoute(state.pages, "/event-log")).to.equal(undefined);
+        expect(pageForRoute(state.pages, "/lane-view", true)).to.equal(undefined);
+        expect(pageForRoute(state.pages, "/lane-view", false)?.id).to.equal("main-lane-view");
+        expect(pageForRoute(state.pages, "/")?.id).to.equal("main-health");
 
-    it("never deletes a main page, and a replace-all import keeps them", () => {
-        let state = reducer(undefined, removePage("main-map"));
-        expect(state.pages.some((p) => p.id === "main-map")).to.equal(true);
+        // Stays deleted across a reload and a replace-all import.
+        state = reload(state);
+        expect(state.pages.some((p) => p.id === "main-event-log")).to.equal(false);
         const mine = buildPageFromTemplate("map", {id: "mine", title: "My map"})!;
         state = reducer(state, importPages({pages: [mine], mode: "replace-all"}));
-        expect(state.pages.map((p) => p.id)).to.include.members(["mine", ...MAIN_PAGES.map((m) => m.id)]);
-        state = reducer(state, removePage("mine"));
-        expect(state.pages.some((p) => p.id === "mine")).to.equal(false);
+        expect(state.pages.some((p) => p.id === "main-event-log")).to.equal(false);
+        expect(state.pages.some((p) => p.id === "main-map")).to.equal(true);
+
+        // A dashboard made from "Events layout" takes notifications back; a second one does not.
+        const events = buildPageFromTemplate("event-log", {id: "ev", title: "Alarms"})!;
+        state = reducer(state, addPage(events));
+        expect(state.pages.find((p) => p.id === "ev")?.mainRoute).to.equal("/event-log");
+        expect(pageForRoute(state.pages, "/event-log")?.id).to.equal("ev");
+        const second = buildPageFromTemplate("event-log", {id: "ev2", title: "More alarms"})!;
+        expect(claimMainRoute(state.pages, second).mainRoute).to.equal(undefined);
+        // A map layout while the built-in Map exists claims nothing.
+        expect(state.pages.find((p) => p.id === "mine")?.mainRoute).to.equal(undefined);
     });
 
-    it("Reset to default keeps a main page a main page", () => {
+    it("renames any dashboard: a literal name and a new unique URL name", () => {
         let state = reducer(undefined, {type: "@@init"});
+        const t = (key: string) => `T(${key})`;
+        expect(pageTitle(state.pages.find((p) => p.id === "main-map")!, t)).to.equal("T(map)");
+        state = reducer(state, renamePage({pageId: "main-map", title: "Gate Ops"}));
+        let map = state.pages.find((p) => p.id === "main-map")!;
+        expect(map.i18nTitle).to.equal(undefined);
+        expect(pageTitle(map, t)).to.equal("Gate Ops");
+        expect(map.slug).to.equal("gate-ops");
+        expect(map.mainRoute).to.equal("/map");
+        state = reducer(state, renamePage({pageId: "main-national", title: "gate ops!"}));
+        expect(state.pages.find((p) => p.id === "main-national")?.slug).to.equal("gate-ops-2");
+        state = reload(state);
+        map = state.pages.find((p) => p.id === "main-map")!;
+        expect(map.title).to.equal("Gate Ops");
+        expect(map.slug).to.equal("gate-ops");
+        expect(slugify("Πύλη Βορράς")).to.equal("πύλη-βορράς");
+        expect(slugify("Contrôle d'accès")).to.equal("contrôle-d-accès");
+        expect(slugify("???")).to.equal("dashboard");
+        // A new page with a taken name gets the next free one.
+        state = reducer(state, addPage({id: "p-x", title: "Map", widgets: [], layouts: {}, showInNav: true}));
+        state = reducer(state, addPage({id: "p-y", title: "Map", widgets: [], layouts: {}, showInNav: true}));
+        expect(state.pages.find((p) => p.id === "p-x")?.slug).to.equal("map");
+        expect(state.pages.find((p) => p.id === "p-y")?.slug).to.equal("map-2");
+    });
+
+    it("moves a live 3.11 state (schema 3) to v4: built-ins first and listed, ORNL switch dropped", () => {
+        const initial = reducer(undefined, {type: "@@init"});
+        const v3Main = (id: string) => {
+            const p = initial.pages.find((m) => m.id === id)!;
+            const {i18nTitle: _i, slug: _s, ...rest} = p;
+            return {...rest, showInNav: false};
+        };
+        const ops = {...buildPageFromTemplate("dashboard", {id: "page-ops", title: "Ops wall"})!, showInNav: true};
+        const named = {...buildPageFromTemplate("map", {id: "page-map", title: "Dashboard"})!, showInNav: true};
+        const live = {
+            schemaVersion: 3,
+            pages: [ops, named, ...MAIN_IDS.map(v3Main)],
+            removedSeededPageIds: ["main-map"],
+            editModePageId: null,
+            mainPagesMode: "ornl",
+        };
+        const state = reload(live);
+        expect(state).not.to.have.property("mainPagesMode");
+        expect(state.schemaVersion).to.equal(PAGE_CONFIG_SCHEMA_VERSION);
+        expect(state.pages.map((p) => p.id)).to.deep.equal([...MAIN_IDS, "page-ops", "page-map"]);
+        // Before v4 nothing could be deleted; the unused field is not trusted.
+        expect(state.removedSeededPageIds).to.deep.equal([]);
+        const health = state.pages.find((p) => p.id === "main-health")!;
+        expect(health.showInNav).to.equal(true);
+        expect(health.i18nTitle).to.equal(true);
+        expect(health.slug).to.equal("state-of-health");
+        expect(state.pages.find((p) => p.id === "main-lane-view")?.showInNav).to.equal(false);
+        expect(state.pages.find((p) => p.id === "page-ops")?.slug).to.equal("ops-wall");
+        // The built-in Dashboard keeps "dashboard"; the user's page named Dashboard gets the next one.
+        expect(state.pages.find((p) => p.id === "page-map")?.slug).to.equal("dashboard-2");
+    });
+
+    it("Reset to default keeps the name, URL, route and sidebar listing", () => {
+        let state = reducer(undefined, renamePage({pageId: "main-map", title: "Yard"}));
         state = {...state, pages: state.pages.map((p) => p.id === "main-map" ? {...p, widgets: [], layouts: {}} : p)};
         state = reducer(state, resetPageToDefault("main-map"));
         const map = state.pages.find((p) => p.id === "main-map")!;
         expect(map.mainRoute).to.equal("/map");
-        expect(map.showInNav).to.equal(false);
+        expect(map.showInNav).to.equal(true);
+        expect(map.title).to.equal("Yard");
+        expect(map.slug).to.equal("yard");
         expect(map.widgets.length).to.be.greaterThan(0);
+        state = reducer(state, resetPageToDefault("main-lane-view"));
+        expect(state.pages.find((p) => p.id === "main-lane-view")?.showInNav).to.equal(false);
+        expect(state.pages.find((p) => p.id === "main-lane-view")?.i18nTitle).to.equal(true);
     });
 
     it("turns a legacy seeded page (schema 2) into an ordinary custom page", () => {

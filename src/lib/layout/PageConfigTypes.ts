@@ -10,7 +10,7 @@
  * datasource objects.
  */
 
-export const PAGE_CONFIG_SCHEMA_VERSION = 3;
+export const PAGE_CONFIG_SCHEMA_VERSION = 4;
 
 export type WidgetType =
     | 'system-status'
@@ -264,8 +264,12 @@ export type PageLaneContext =
 export interface PageConfig {
     /** Seeded ids: 'dashboard' | 'event-log' | 'map' | 'national-view' | 'lane-view'; user pages: uuid. */
     id: string;
-    /** Seeded pages store an i18n key; user pages store literal text. seededRoute distinguishes. */
+    /** Literal text, or an i18n key when `i18nTitle` is set (built-in dashboards until renamed). */
     title: string;
+    /** `title` is an i18n key, so the name follows the language. Renaming clears it. */
+    i18nTitle?: boolean;
+    /** URL name (`/dashboard/?name=<slug>`), unique across pages. See MainPages.ts. */
+    slug?: string;
     /** Key into the curated PAGE_ICONS map. */
     icon?: string;
     /**
@@ -277,9 +281,9 @@ export interface PageConfig {
     /** Template the page was created from; "Reset to default" rebuilds it from that template. */
     templateId?: string;
     /**
-     * Built-in editable replacement for one of ORNL's main routes (e.g. '/', '/event-log'). Such a
-     * page cannot be deleted, its title is an i18n key, and it is listed in the main menu rather
-     * than with the user's own pages. See MainPages.ts.
+     * The ORNL route this dashboard opens for (e.g. '/', '/event-log', '/lane-view'): ORNL's own
+     * links to that route land here instead. Deleting the page gives the route back to ORNL's
+     * page. See MainPages.ts.
      */
     mainRoute?: string;
     /** Hide from the nav drawer (e.g. lane-view is reached by clicking a lane). */
@@ -295,20 +299,13 @@ export interface PageLayoutState {
     /** Order = nav order. */
     pages: PageConfig[];
     /**
-     * Seeded pages the user explicitly deleted. Rehydrate re-seeds missing
-     * seeded pages (app-upgrade self-healing) unless listed here.
+     * Built-in dashboards the user deleted. Rehydrate re-seeds missing built-ins
+     * (a release that adds one) unless listed here.
      */
     removedSeededPageIds: string[];
     /** Page currently in edit mode; transient. */
     editModePageId: string | null;
-    /**
-     * 'widget' (default): ORNL's main routes open the built-in editable pages. 'ornl': ORNL's
-     * original pages. Per browser (persisted with the pages).
-     */
-    mainPagesMode?: MainPagesMode;
 }
-
-export type MainPagesMode = 'widget' | 'ornl';
 
 /** On-disk JSON file format for export/import. */
 export interface ExportedConfig {
