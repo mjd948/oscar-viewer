@@ -6,7 +6,14 @@ import {
     resolveEventTableColumns,
     visibilityFromColumnSettings,
 } from "../../src/lib/layout/EventTableColumns";
-import {DEFAULT_EVENT_TABLE_COLUMNS, PAGE_CONFIG_SCHEMA_VERSION, PageConfig} from "../../src/lib/layout/PageConfigTypes";
+import {
+    buildDefaultWidgetConfig,
+    DEFAULT_EVENT_TABLE_COLUMNS,
+    KNOWN_WIDGET_TYPES,
+    PAGE_CONFIG_SCHEMA_VERSION,
+    PageConfig,
+    WidgetType,
+} from "../../src/lib/layout/PageConfigTypes";
 import reducer, {addPage, resetPageToDefault} from "../../src/lib/state/PageLayoutSlice";
 
 describe("custom widget pages on ORNL 3.11", () => {
@@ -46,6 +53,28 @@ describe("custom widget pages on ORNL 3.11", () => {
         expect(state.pages[0].title).to.equal("Lane wall");
         expect(state.pages[0].icon).to.equal("star");
         expect(state.pages[0].widgets.length).to.equal(page.widgets.length);
+    });
+
+    it("offers a template for every ORNL view and keeps every template valid", () => {
+        const expected: Record<string, string[]> = {
+            "event-log": ["event-lookup", "event-table"],
+            "state-of-health": ["state-of-health"],
+            "report-generator": ["report-generator"],
+            "alarm-transfer": ["alarm-transfer"],
+        };
+        Object.entries(expected).forEach(([id, types]) => {
+            const page = buildPageFromTemplate(id, {id: `p-${id}`, title: id})!;
+            expect(page.widgets.map((w) => w.type), id).to.deep.equal(types);
+        });
+        // Validation drops a whole page with an unknown widget type: every template must survive it.
+        const pages = PAGE_TEMPLATE_IDS.map((id) => buildPageFromTemplate(id, {id: `v-${id}`, title: id})!);
+        const rehydrated = rehydratePageLayoutState({schemaVersion: PAGE_CONFIG_SCHEMA_VERSION, pages});
+        expect(rehydrated.pages.map((p) => p.id)).to.deep.equal(pages.map((p) => p.id));
+        ["state-of-health", "report-generator", "alarm-transfer", "event-details", "event-lookup", "rs350-spectrum"]
+            .forEach((type) => {
+                expect(KNOWN_WIDGET_TYPES, type).to.include(type);
+                expect(buildDefaultWidgetConfig(type as WidgetType), type).to.exist;
+            });
     });
 
     it("resolves saved event-table columns against ORNL's columns", () => {

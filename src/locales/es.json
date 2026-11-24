@@ -911,5 +911,10 @@
   "vizTimeProfile": "Perfil por hora del día",
   "widgetSettings": "Configuración del widget",
   "widgetTitle": "Título del widget",
-  "laneView": "Vista del carril"
+  "laneView": "Vista del carril",
+  "eventLookup": "Búsqueda de eventos",
+  "rs350Spectrum": "Espectros RS-350",
+  "rs350SpectrumOnly": "{lane} no es un carril RS-350; los espectros solo se muestran para detectores RS-350.",
+  "openFullPage": "Abrir página completa",
+  "selectEventForDetails": "Seleccione un evento en una tabla de alarmas o eventos de esta página para ver sus detalles aquí."
 }

@@ -8,6 +8,7 @@
 import React from "react";
 import {Box, Typography} from "@mui/material";
 import LaneStatusDetail from "@/app/_components/lane-view/LaneStatus";
+import DailyFileMessage from "@/app/_components/lane-view/DailyFileMessage";
 import {LaneDetailStatusWidgetConfig} from "@/lib/layout/PageConfigTypes";
 import {WidgetProps} from "@/app/_components/layout/WidgetTypes";
 import {useResolvedLane} from "@/app/_components/layout/useResolvedLane";
@@ -26,5 +27,11 @@ export default function LaneDetailStatusWidget({page, widget}: WidgetProps) {
             </Box>
         );
     }
-    return <LaneStatusDetail key={lane} dataSourcesByLane={collection}/>;
+    // ORNL's Lane View shows the daily-file notice under the status strip; keep it with it.
+    return (
+        <Box sx={{height: '100%', overflowY: 'auto', minInlineSize: 0}}>
+            <LaneStatusDetail key={lane} dataSourcesByLane={collection}/>
+            <DailyFileMessage key={`${lane}:daily`} dataSourcesByLane={collection}/>
+        </Box>
+    );
 }

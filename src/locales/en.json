@@ -911,5 +911,10 @@
   "vizTimeProfile": "Time-of-day profile",
   "widgetSettings": "Widget settings",
   "widgetTitle": "Widget title",
-  "laneView": "Lane View"
+  "laneView": "Lane View",
+  "eventLookup": "Event Lookup",
+  "rs350Spectrum": "RS-350 Spectra",
+  "rs350SpectrumOnly": "{lane} is not an RS-350 lane; spectra are only shown for RS-350 detectors.",
+  "openFullPage": "Open full page",
+  "selectEventForDetails": "Select an event in an alarm or event table on this page to see its details here."
 }

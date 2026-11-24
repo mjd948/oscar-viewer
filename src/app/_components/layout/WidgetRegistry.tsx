@@ -27,6 +27,12 @@ import StarRoundedIcon from "@mui/icons-material/StarRounded";
 import BoltRoundedIcon from "@mui/icons-material/BoltRounded";
 import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
 import DirectionsCarRoundedIcon from "@mui/icons-material/DirectionsCarRounded";
+import HealthAndSafetyRoundedIcon from "@mui/icons-material/HealthAndSafetyRounded";
+import SummarizeRoundedIcon from "@mui/icons-material/SummarizeRounded";
+import QrCodeScannerRoundedIcon from "@mui/icons-material/QrCodeScannerRounded";
+import ArticleRoundedIcon from "@mui/icons-material/ArticleRounded";
+import ManageSearchRoundedIcon from "@mui/icons-material/ManageSearchRounded";
+import SsidChartRoundedIcon from "@mui/icons-material/SsidChartRounded";
 import {WidgetType} from "@/lib/layout/PageConfigTypes";
 import {WidgetComponent, WidgetConfigFormComponent} from "./WidgetTypes";
 
@@ -35,6 +41,7 @@ import EventTableWidget from "@/app/_components/widgets/EventTableWidget";
 import AdjudicationTableWidget from "@/app/_components/widgets/AdjudicationTableWidget";
 import LaneDetailStatusWidget from "@/app/_components/widgets/LaneDetailStatusWidget";
 import StatusTableWidget from "@/app/_components/widgets/StatusTableWidget";
+import EventLookupWidget from "@/app/_components/widgets/EventLookupWidget";
 
 import SystemStatusConfigForm from "@/app/_components/widgets/config/SystemStatusConfigForm";
 import EventTableConfigForm from "@/app/_components/widgets/config/EventTableConfigForm";
@@ -56,6 +63,12 @@ const ChartWidget = dynamic(() => import("@/app/_components/widgets/ChartWidget"
 const QuickViewWidget = dynamic(() => import("@/app/_components/widgets/QuickViewWidget"), {ssr: false, loading: widgetLoading});
 const NationalStatsWidget = dynamic(() => import("@/app/_components/widgets/NationalStatsWidget"), {ssr: false, loading: widgetLoading});
 const AlarmStatsWidget = dynamic(() => import("@/app/_components/widgets/AlarmStatsWidget"), {ssr: false, loading: widgetLoading});
+// Whole ORNL views: client-only like their pages (camera/QR scanning, chart.js, report download).
+const StateOfHealthWidget = dynamic(() => import("@/app/_components/widgets/StateOfHealthWidget"), {ssr: false, loading: widgetLoading});
+const ReportGeneratorWidget = dynamic(() => import("@/app/_components/widgets/ReportGeneratorWidget"), {ssr: false, loading: widgetLoading});
+const AlarmTransferWidget = dynamic(() => import("@/app/_components/widgets/AlarmTransferWidget"), {ssr: false, loading: widgetLoading});
+const EventDetailsWidget = dynamic(() => import("@/app/_components/widgets/EventDetailsWidget"), {ssr: false, loading: widgetLoading});
+const RS350SpectrumWidget = dynamic(() => import("@/app/_components/widgets/RS350SpectrumWidget"), {ssr: false, loading: widgetLoading});
 
 export interface WidgetRegistryEntry {
     component: WidgetComponent;
@@ -132,6 +145,42 @@ export const WIDGET_REGISTRY: Record<WidgetType, WidgetRegistryEntry> = {
         titleKey: 'alarmStats',
         icon: <QueryStatsRoundedIcon/>,
     },
+    'state-of-health': {
+        component: StateOfHealthWidget as WidgetComponent,
+        ConfigForm: undefined,
+        titleKey: 'stateOfHealth',
+        icon: <HealthAndSafetyRoundedIcon/>,
+    },
+    'report-generator': {
+        component: ReportGeneratorWidget as WidgetComponent,
+        ConfigForm: undefined,
+        titleKey: 'reportGenerator',
+        icon: <SummarizeRoundedIcon/>,
+    },
+    'alarm-transfer': {
+        component: AlarmTransferWidget as WidgetComponent,
+        ConfigForm: undefined,
+        titleKey: 'alarmTransfer',
+        icon: <QrCodeScannerRoundedIcon/>,
+    },
+    'event-details': {
+        component: EventDetailsWidget as WidgetComponent,
+        ConfigForm: undefined,
+        titleKey: 'eventDetails',
+        icon: <ArticleRoundedIcon/>,
+    },
+    'event-lookup': {
+        component: EventLookupWidget,
+        ConfigForm: undefined,
+        titleKey: 'eventLookup',
+        icon: <ManageSearchRoundedIcon/>,
+    },
+    'rs350-spectrum': {
+        component: RS350SpectrumWidget as WidgetComponent,
+        ConfigForm: LaneDetailStatusConfigForm,
+        titleKey: 'rs350Spectrum',
+        icon: <SsidChartRoundedIcon/>,
+    },
 };
 
 /** Curated icon set for pages (nav drawer + Add Page dialog). */
@@ -149,6 +198,9 @@ export const PAGE_ICONS: Record<string, React.ReactNode> = {
     bolt: <BoltRoundedIcon/>,
     shield: <ShieldRoundedIcon/>,
     lane: <DirectionsCarRoundedIcon/>,
+    health: <HealthAndSafetyRoundedIcon/>,
+    report: <SummarizeRoundedIcon/>,
+    transfer: <QrCodeScannerRoundedIcon/>,
 };
 
 export function getPageIcon(iconKey: string | undefined): React.ReactNode {
