@@ -413,6 +413,79 @@ describe("Users, Passkeys & Access Control Console", () => {
             .and("have.attr", "rel", "noopener noreferrer");
     });
 
+    it("keeps the temporary-password banner's QR on the newest invite after the row's QR button reissues it", () => {
+        const users: any[] = [{
+            username: "admin", displayName: "Administrator", role: "admin", roles: ["admin"], enabled: true,
+            mustChangePassword: false, allowedViews: [], authSource: "local", passkeyCount: 0, activeSessions: 1,
+            createdAt: 1731700000000, lastLoginAt: 1731850000000,
+        }];
+        cy.intercept({method: "GET", pathname: "/sensorhub/session"}, {
+            statusCode: 200,
+            body: {
+                username: "admin", displayName: "Administrator", primaryRole: "admin", roles: ["admin"], isAdmin: true,
+                canAdjudicate: true, isReadOnly: false, allowedViews: [], mustChangePassword: false,
+                passkeyUserId: "YWRtaW5fdXNlcjAx", passkeyCount: 0, authSource: "local", keepSignedIn: true,
+                idleTimeoutSeconds: 0, absoluteTimeoutSeconds: 0, rpId: "oscar.local", rpIdSupported: true,
+            },
+        }).as("getAdminSession");
+        cy.intercept({method: "GET", pathname: "/sensorhub/session/account/passkeys"}, {
+            statusCode: 200,
+            body: {rpId: "oscar.local", rpIdSupported: true, passkeyUserId: "YWRtaW5fdXNlcjAx", acceptedCredentialIds: [], passkeys: []},
+        });
+        cy.intercept({method: "GET", pathname: "/sensorhub/session/admin/overview"}, (req) => {
+            req.reply({statusCode: 200, body: {users, federationTokens: [], policy: {}, recovery: {}}});
+        }).as("getOverview");
+        const mike = {
+            username: "Mike", displayName: "Mike", role: "operator", roles: ["operator"], enabled: true,
+            mustChangePassword: true, allowedViews: [], authSource: "local", passkeyCount: 0, activeSessions: 0,
+            createdAt: 1731860000000, lastLoginAt: 0,
+        };
+        cy.intercept({method: "POST", pathname: "/sensorhub/session/admin/users"}, (req) => {
+            users.push(mike);
+            req.reply({
+                statusCode: 201,
+                body: {
+                    user: mike, temporaryPassword: "ABCD-EFGH-JKLM-2345",
+                    inviteToken: "oscar_inv_aaaaaaaaaaaa_FromCreateRevokedLater", inviteExpiresAt: 1732464800000,
+                },
+            });
+        }).as("createUser");
+        cy.intercept({method: "POST", pathname: "/sensorhub/session/admin/users/Mike/invite"}, {
+            statusCode: 200,
+            body: {user: mike, inviteToken: "oscar_inv_bbbbbbbbbbbb_NewestInvite", inviteExpiresAt: 1732464900000},
+        }).as("reissueInvite");
+
+        cy.mount(
+            <LanguageProvider>
+                <UsersAccessManager />
+            </LanguageProvider>,
+        );
+        cy.wait(["@getAdminSession", "@getOverview"]);
+        cy.contains('[role="tab"]', "Users & Roles").click();
+        cy.get('[data-testid="add-user-button"]').click();
+        cy.get('[role="dialog"]').within(() => {
+            cy.contains("label", "User").parent().find("input").type("Mike");
+            cy.contains("button", "Save").click();
+        });
+        cy.wait("@createUser");
+
+        // The row's QR button mints a new invite, which revokes the one from account creation.
+        cy.get('[data-testid="issue-qr-invite-Mike"]').click();
+        cy.wait("@reissueInvite");
+        cy.get('[data-testid="startup-message-Mike"]').should("contain", "oscar_inv_bbbbbbbbbbbb_NewestInvite");
+        cy.contains('[data-testid="onboarding-pack-dialog"] button', "Done").click();
+        cy.get('[data-testid="onboarding-pack-dialog"]').should("not.exist");
+
+        // The banner still holds the temporary password; its QR must now show the newest invite.
+        cy.contains("ABCD-EFGH-JKLM-2345").should("be.visible");
+        cy.get('[data-testid="open-single-invite-qr-btn"]').click();
+        cy.get('[data-testid="startup-message-Mike"]')
+            .should("contain", "oscar_inv_bbbbbbbbbbbb_NewestInvite")
+            .and("contain", "ABCD-EFGH-JKLM-2345")
+            .and("not.contain", "FromCreateRevokedLater");
+    });
+
+
     it("surfaces 1-click Federation Service Token setup on Servers (NodeForm) and auto-switches when pasting oscar_fed_", () => {
         const store = configureStore({
             reducer: {oshSlice: oshReducer},

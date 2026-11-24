@@ -1093,6 +1093,13 @@ export default function UsersAccessManager() {
     const handleIssueQrInvite = async (u: AdminUserSummary) => {
         try {
             const res = await adminIssueUserInvite(u.username, 168);
+            // A new invite revokes the user's earlier ones, including the one behind the
+            // temporary-password banner's QR button, so point that button at the new invite.
+            setOneTimeTempPassword((prev) =>
+                prev?.card && prev.username === u.username
+                    ? { ...prev, card: { ...prev.card, inviteToken: res.inviteToken, inviteExpiresAt: res.inviteExpiresAt } }
+                    : prev,
+            );
             setOnboardingPackCards([
                 {
                     user: res.user,
