@@ -4,6 +4,7 @@ import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import {EventTableData} from "@/lib/data/oscar/TableHelpers";
 import {AdjudicationCode} from "@/lib/data/oscar/adjudication/models/AdjudicationConstants";
 import {generateAdjudicationCommandJSON, sendCommand} from "@/lib/data/oscar/OSCARCommands";
+import {buildEventBoundedPhenomenonTime} from "@/lib/data/oscar/EventLookup";
 import {isAdjudicationControlStream, isOccupancyDataStream} from "@/lib/data/oscar/Utilities";
 
 export interface BulkAdjudicationValues {
@@ -130,7 +131,9 @@ export async function adjudicateOneEvent(
 
         let observationId = event.occupancyObsId;
         if (!observationId) {
+            const boundedPhenomenonTime = buildEventBoundedPhenomenonTime(event.startTime, event.endTime);
             const query = await dataStream.searchObservations(new ObservationFilter({
+                ...(boundedPhenomenonTime ? {phenomenonTime: boundedPhenomenonTime} : {}),
                 filter: `startTime='${event.startTime}' AND endTime='${event.endTime}'`,
             }), 1);
             const observations: any[] = await query.nextPage();

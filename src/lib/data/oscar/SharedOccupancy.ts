@@ -2,6 +2,7 @@ import {INode} from "@/lib/data/osh/Node";
 import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import {EventTableData} from "@/lib/data/oscar/TableHelpers";
 import {isOccupancyDataStream} from "@/lib/data/oscar/Utilities";
+import {buildEventBoundedPhenomenonTime} from "@/lib/data/oscar/EventLookup";
 import {hashString} from "@/app/utils/Utils";
 import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
 
@@ -75,8 +76,10 @@ export async function resolveOccupancyId(event: EventTableData, lane: LaneMapEnt
     const endMs = new Date(event.endTime).getTime();
     const streams = lane.datastreams.filter((stream: any) => isOccupancyDataStream(stream)
         && (!event.dataStreamId || stream.properties.id === event.dataStreamId));
+    const boundedPhenomenonTime = buildEventBoundedPhenomenonTime(event.startTime, event.endTime);
     const matches = await Promise.all(streams.map(async (stream: any) => {
         const query = await stream.searchObservations(new ObservationFilter({
+            ...(boundedPhenomenonTime ? {phenomenonTime: boundedPhenomenonTime} : {}),
             filter: `startTime='${new Date(event.startTime).toISOString()}' AND endTime='${new Date(event.endTime).toISOString()}'`,
         }), 2);
         let items: any[] = (await query.nextPage()) ?? [];

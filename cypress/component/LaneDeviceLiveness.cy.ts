@@ -27,6 +27,10 @@ describe("lane device liveness", () => {
             .to.deep.equal({silent: true, state: "offline"});
     });
 
+    it("keeps a lane unknown when neither connection status nor device heartbeats have ever reported", () => {
+        expect(deriveDeviceLiveness(null, undefined, NOW)).to.deep.equal({silent: false, state: "unknown"});
+    });
+
     it("tolerates the threshold boundary itself as live", () => {
         expect(deriveDeviceLiveness(NOW - DEVICE_SILENCE_THRESHOLD_MS, "online", NOW).state).to.equal("online");
     });

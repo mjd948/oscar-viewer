@@ -56,6 +56,7 @@ import AdjudicationData from "@/lib/data/oscar/adjudication/Adjudication";
 import {LaneMapEntry} from "@/lib/data/oscar/LaneCollection";
 import ObservationFilter from "osh-js/source/core/consysapi/observation/ObservationFilter";
 import ControlStream from "osh-js/source/core/consysapi/controlstream/ControlStream";
+import {buildEventBoundedPhenomenonTime} from "@/lib/data/oscar/EventLookup";
 import {isAdjudicationControlStream} from "@/lib/data/oscar/Utilities";
 import {generateAdjudicationCommandJSON, sendCommand} from "@/lib/data/oscar/OSCARCommands";
 import SecondaryInspectionSelect from "./SecondaryInspectionSelect";
@@ -917,7 +918,12 @@ export default function AdjudicationDetail(props: {
             }
 
             if (!tempAdjData.occupancyObsId) {
+                const boundedPhenomenonTime = buildEventBoundedPhenomenonTime(
+                    props.event.startTime,
+                    props.event.endTime,
+                );
                 let query = await ds.searchObservations(new ObservationFilter({
+                    ...(boundedPhenomenonTime ? {phenomenonTime: boundedPhenomenonTime} : {}),
                     filter: `startTime='${props.event.startTime}' AND endTime='${props.event.endTime}'`
                 }), 1);
 
@@ -1042,7 +1048,12 @@ export default function AdjudicationDetail(props: {
         const ds = currLaneEntry.datastreams.find((candidate: any) => candidate.properties.id == props.event.dataStreamId);
         if (!ds) return '';
         try {
+            const boundedPhenomenonTime = buildEventBoundedPhenomenonTime(
+                props.event.startTime,
+                props.event.endTime,
+            );
             const query = await ds.searchObservations(new ObservationFilter({
+                ...(boundedPhenomenonTime ? {phenomenonTime: boundedPhenomenonTime} : {}),
                 filter: `startTime='${props.event.startTime}' AND endTime='${props.event.endTime}'`,
             }), 1);
             const occupancyObservation = await query.nextPage();

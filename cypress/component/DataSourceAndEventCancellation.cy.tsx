@@ -1036,7 +1036,7 @@ describe("DataSourceProvider lane-map deduplication and EventTable request cance
         });
     });
 
-    it("serves visited pages instantly on repeated Previous clicks, prefetches page - 1 when stepping backward from a deep page, and preserves visible rows on error", () => {
+    it("collapses rapid 10x Previous bursts via settled debounce without a visited-page cache and preserves visible rows on error", () => {
         const rowCalls: Array<{offset: number; limit: number}> = [];
         let forcePermanentFailure = false;
 
@@ -1158,67 +1158,172 @@ describe("DataSourceProvider lane-map deduplication and EventTable request cance
         }
 
         cy.mount(<BackwardPaginationHarness />);
-        // Initial Page 0 transparently retries the transient 503 and renders + prefetches Page 1
         cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-0");
         cy.get('[data-testid="bw-err"]').should("have.text", "false");
         cy.wrap(null).should(() => {
             expect(rowCalls.map(c => c.offset)).to.deep.equal([0, 15]);
         });
 
-        // Step forward Page 0 -> 1 -> 2 -> 3
-        cy.get('[data-testid="bw-next"]').click();
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-15");
-        cy.get('[data-testid="bw-next"]').click();
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-30");
-        cy.get('[data-testid="bw-next"]').click();
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-45");
-        cy.wrap(null).should(() => {
-            expect(rowCalls.some(c => c.offset === 60)).to.equal(true);
-        });
-
-        cy.then(() => {
-            rowCalls.length = 0;
-        });
-
-        // Repeatedly pressing Previous (Page 3 -> 2 -> 1) serves visited pages in 0ms with ZERO server row queries!
-        cy.get('[data-testid="bw-prev"]').click();
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-30");
-        cy.get('[data-testid="bw-prev"]').click();
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-15");
-        cy.then(() => {
-            expect(rowCalls).to.have.length(0);
-        });
-
-        // Jump to deep unvisited Page 10 (offset=150), then step Previous to Page 9 (offset=135) -> prefetches Page 8 (offset=120)!
+        // Jump to deep Page 10 (offset=150) and let it + Page 11 prefetch settle
         cy.get('[data-testid="bw-jump-10"]').click();
         cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-150");
+        cy.wrap(null).should(() => {
+            expect(rowCalls.some(c => c.offset === 165)).to.equal(true);
+        });
         cy.then(() => {
             rowCalls.length = 0;
         });
-        cy.get('[data-testid="bw-prev"]').click();
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-135");
+
+        // Rapidly click Previous 9 times in a row (Page 10 -> Page 1):
+        // 120ms settled debounce cancels intermediate pages and fetches only landing Page 1 (offset=15) + forward prefetch Page 2 (offset=30)
+        cy.then(() => {
+            const btn = Cypress.$('[data-testid="bw-prev"]')[0] as HTMLButtonElement;
+            for (let k = 0; k < 9; k++) {
+                btn.click();
+            }
+        });
+        cy.get('[data-testid="bw-page"]').should("have.text", "1");
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-15");
         cy.wrap(null).should(() => {
-            expect(rowCalls.map(c => c.offset)).to.deep.equal([135, 120]);
+            expect(rowCalls.map(c => c.offset)).to.include(15);
+            // At most the first un-debounced click (135, aborted) + settled landing page (15) + forward prefetch (30)
+            expect(rowCalls.length).to.be.at.most(3);
         });
 
-        // Stepping Previous again (Page 9 -> Page 8) serves prefetched Page 8 (offset=120) and chains prefetch of Page 7 (offset=105)
-        cy.get('[data-testid="bw-prev"]').click();
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-120");
-        cy.wrap(null).should(() => {
-            expect(rowCalls.map(c => c.offset)).to.deep.equal([135, 120, 105]);
-        });
+        // Stepping Next (Page 1 -> Page 2) consumes the prefetched offset=30 slice immediately
+        cy.get('[data-testid="bw-next"]').click();
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-30");
 
-        // Set permanent server failure: Page 7 still renders from chained prefetch (while Page 6 prefetch fails silently),
-        // and stepping Previous onto uncached Page 6 sets pageQueryError=true while preserving Page 7's 15 visible rows
+        // On server failure, stepping Previous to Page 1 sets pageQueryError=true while preserving Page 2's 15 visible rows
         cy.then(() => {
             forcePermanentFailure = true;
         });
         cy.get('[data-testid="bw-prev"]').click();
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-105");
-        cy.get('[data-testid="bw-err"]').should("have.text", "false");
-        cy.get('[data-testid="bw-prev"]').click();
         cy.get('[data-testid="bw-err"]').should("have.text", "true");
         cy.get('[data-testid="bw-count"]').should("have.text", "15");
-        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-105");
+        cy.get('[data-testid="bw-first"]').should("have.text", "Lane-Row-30");
+    });
+
+    it("gates disjoint priority bucket-count prewarm on settled total count so selective filters never fan out premature bucket counts", () => {
+        const countQueries: string[] = [];
+        let releaseFilteredTotal: (() => void) | null = null;
+        let filteredTotalCount = 8;
+
+        cy.window().then((win) => {
+            cy.stub(win, "fetch").callsFake((input: RequestInfo | URL) => {
+                const url = String(input);
+                if (url.includes("/observations/count?")) {
+                    const parsed = new URL(url);
+                    const q = decodeURIComponent(parsed.searchParams.get("filter") ?? "");
+                    countQueries.push(q);
+                    if (q === "maxGamma>=50") {
+                        return new Promise<Response>((resolve) => {
+                            releaseFilteredTotal = () => resolve(new Response(
+                                JSON.stringify({count: filteredTotalCount}),
+                                {status: 200, headers: {"Content-Type": "application/json"}},
+                            ));
+                        });
+                    }
+                    if (q === "maxGamma>=25") {
+                        return Promise.resolve(new Response(
+                            JSON.stringify({count: 500}),
+                            {status: 200, headers: {"Content-Type": "application/json"}},
+                        ));
+                    }
+                    return Promise.resolve(new Response(
+                        JSON.stringify({count: q === "" ? 500 : 125}),
+                        {status: 200, headers: {"Content-Type": "application/json"}},
+                    ));
+                }
+                return Promise.resolve(new Response(JSON.stringify({items: []}), {
+                    status: 200,
+                    headers: {"Content-Type": "application/json"},
+                }));
+            });
+        });
+
+        const fakeNode: any = {
+            id: "node-settled",
+            name: "Local Node",
+            getConnectedSystemsEndpoint: () => "https://node.example/sensorhub/api",
+            getBasicAuthHeader: () => ({}),
+        };
+
+        function SettledPrewarmHarness() {
+            const [baseFilter, setBaseFilter] = useState<string>("");
+            const queryPlans = useMemo<EventQueryPlan[]>(() => [{
+                key: `total-${baseFilter}`,
+                node: fakeNode,
+                datastreamIds: ["occ-1"],
+                filter: baseFilter,
+            }], [baseFilter]);
+            const pageQueryPlans = useMemo<EventQueryPlan[]>(() => [
+                "gammaAlarm=true AND neutronAlarm=true",
+                "gammaAlarm=true AND neutronAlarm=false",
+                "gammaAlarm=false AND neutronAlarm=true",
+                "gammaAlarm=false AND neutronAlarm=false",
+            ].map((bucket, idx) => ({
+                key: `bucket-${baseFilter}-${idx}`,
+                node: fakeNode,
+                datastreamIds: ["occ-1"],
+                filter: baseFilter ? `(${baseFilter}) AND (${bucket})` : bucket,
+            })), [baseFilter]);
+
+            const fetchPlanRows = useCallback(async () => [] as EventTableData[], []);
+            const {rowCount} = useAbortableEventQueries({
+                queryPlans,
+                pageQueryPlans,
+                page: 0,
+                pageSize: 15,
+                pageLoadedTime: "2026-11-24T12:00:00.000Z",
+                disjointPriorityPlans: true,
+                prewarmBucketCounts: true,
+                prefetchNextPage: true,
+                fetchPlanRows,
+            });
+
+            return (
+                <div>
+                    <span data-testid="settled-count">{String(rowCount)}</span>
+                    <button data-testid="apply-selective" onClick={() => setBaseFilter("maxGamma>=50")}>Selective</button>
+                    <button data-testid="apply-broad" onClick={() => setBaseFilter("maxGamma>=25")}>Broad</button>
+                </div>
+            );
+        }
+
+        cy.mount(<SettledPrewarmHarness />);
+        cy.get('[data-testid="settled-count"]').should("have.text", "500");
+        // Initial unfiltered load settles at 500 -> 1 total + 4 bucket prewarms = 5 count queries
+        cy.wrap(null).should(() => {
+            expect(countQueries).to.have.length(5);
+        });
+        cy.then(() => {
+            countQueries.length = 0;
+        });
+
+        // Apply selective filter (maxGamma>=50) whose total count is still in flight while stale rowCount is 500:
+        // even after 250ms (> 150ms prewarm delay), ZERO bucket prewarms may fire before total count settles!
+        cy.get('[data-testid="apply-selective"]').click();
+        cy.wait(250);
+        cy.then(() => {
+            expect(countQueries).to.deep.equal(["maxGamma>=50"]);
+            filteredTotalCount = 8;
+            releaseFilteredTotal?.();
+        });
+        // Settled count is 8 (<= pageSize 15), so STILL zero bucket prewarms fire!
+        cy.get('[data-testid="settled-count"]').should("have.text", "8");
+        cy.wait(220);
+        cy.then(() => {
+            expect(countQueries).to.deep.equal(["maxGamma>=50"]);
+            countQueries.length = 0;
+        });
+
+        // Apply broad filter (maxGamma>=25 -> 500 > pageSize 15): once total count settles, 4 bucket prewarms fire.
+        cy.get('[data-testid="apply-broad"]').click();
+        cy.get('[data-testid="settled-count"]').should("have.text", "500");
+        cy.wrap(null).should(() => {
+            expect(countQueries).to.have.length(5);
+            expect(countQueries[0]).to.equal("maxGamma>=25");
+        });
     });
 });

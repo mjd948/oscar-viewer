@@ -52,7 +52,12 @@ import SuspenseLoad from "@/app/_components/SuspenseLoad";
 import {useLanguage} from '@/app/contexts/LanguageContext';
 import AlarmQrExportButton from "@/app/_components/alarm-transfer/AlarmQrExportButton";
 import ShareOccupancyButton from "@/app/_components/event-details/ShareOccupancyButton";
-import {buildEventDetailsHref, EventLookupError, resolveEventObservationId} from "@/lib/data/oscar/EventLookup";
+import {
+    buildEventBoundedPhenomenonTime,
+    buildEventDetailsHref,
+    EventLookupError,
+    resolveEventObservationId,
+} from "@/lib/data/oscar/EventLookup";
 import {
     isCurrentEventLogFiltered,
     markSessionCachedEventAdjudicated,
@@ -274,7 +279,12 @@ export function EventPreview() {
                     resolvedObsId = await resolveEventObservationId(eventPreview.eventData, currLaneEntry);
                 } catch (lookupErr) {
                     if (!(lookupErr instanceof EventLookupError && lookupErr.code === "not-found") && ds?.searchObservations) {
+                        const boundedPhenomenonTime = buildEventBoundedPhenomenonTime(
+                            eventPreview.eventData.startTime,
+                            eventPreview.eventData.endTime,
+                        );
                         const query = await ds.searchObservations(new ObservationFilter({
+                            ...(boundedPhenomenonTime ? {phenomenonTime: boundedPhenomenonTime} : {}),
                             filter: `startTime='${eventPreview.eventData.startTime}' AND endTime='${eventPreview.eventData.endTime}'`
                         }), 1);
                         const occupancyObservation: any[] = (await query.nextPage()) ?? [];

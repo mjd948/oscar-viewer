@@ -109,14 +109,19 @@ const HEARTBEAT_KINDS = new Set<StreamKind>(["gamma", "neutron", "heartbeat"]);
 
 /**
  * RPM connection state of a lane that has device heartbeat streams. Silence wins over a
- * module's claim of "online"; an explicit "offline" from the module is always believed; and
- * fresh device data proves the lane online even when no connection stream exists (Kromek D5).
+ * module's claim of "online"; an explicit "offline" from the module is always believed; fresh
+ * device data proves the lane online even when no connection stream exists (Kromek D5); and a
+ * lane where neither connection status nor device heartbeats have ever reported stays "unknown"
+ * so unstarted/empty streams never masquerade as silent offline hardware.
  */
 export function deriveDeviceLiveness(
     newestDeviceDataAt: number | null,
     reportedState: ConnectionState | undefined,
     now: number,
 ): {silent: boolean; state: ConnectionState} {
+    if (newestDeviceDataAt == null && reportedState === undefined) {
+        return {silent: false, state: "unknown"};
+    }
     const silent = newestDeviceDataAt == null || now - newestDeviceDataAt > DEVICE_SILENCE_THRESHOLD_MS;
     return {silent, state: silent || reportedState === "offline" ? "offline" : "online"};
 }
@@ -145,6 +150,7 @@ async function fetchHealthQueryPage(
     query: any,
     signal: AbortSignal,
     lowPriority = false,
+    onServerTimestamp?: (serverMs: number) => void,
 ): Promise<any[]> {
     // The pinned osh-js Collection does not yet expose AbortSignal. Its public
     // query metadata and parser let this bounded health request use the same
@@ -164,6 +170,11 @@ async function fetchHealthQueryPage(
         const response = await fetch(`${query.url}?${queryString}`, fetchOptions);
         if (!response.ok)
             throw new Error(`Got ${response.status} response from ${query.url}`);
+        const dateHeader = response.headers.get("date");
+        const serverMs = dateHeader ? Date.parse(dateHeader) : NaN;
+        if (Number.isFinite(serverMs)) {
+            onServerTimestamp?.(serverMs);
+        }
         if (query.responseFormat === "arraybuffer") {
             return await query.parseResponse(await response.arrayBuffer());
         }
@@ -523,6 +534,10 @@ export function useLaneHealth() {
         const respondedBindings = new Set<StreamBinding>();
         // Last connection state each lane's RPM module reported, before silence is applied.
         const reportedRpmState = new Map<string, ConnectionState>();
+        // Server-minus-browser clock offset (ms) measured from HTTP Date headers per node,
+        // applied when workstation/browser clocks drift by > 2 s so healthy 1 Hz lanes do
+        // not false-offline due to NTP skew.
+        const nodeClockOffsetMs = new Map<any, number>();
         const faultSamples = new Map<string, Map<FaultKey, Map<string, TelemetryState>>>();
 
         setLanes(initialLanes);
@@ -689,9 +704,15 @@ export function useLaneHealth() {
         };
 
         const markBindingUnknown = (binding: StreamBinding) => {
-            // A heartbeat carries no state to forget: its silence is judged by applyDeviceLiveness.
+            if (HEARTBEAT_KINDS.has(binding.kind) && !binding.cameraSystemIds.has(binding.systemId)) {
+                binding.lastAppliedTimestamp = null;
+            }
+            // A heartbeat carries no fault/connection state of its own: its silence is judged by applyDeviceLiveness.
             if (binding.kind === "heartbeat") return;
             if (binding.kind === "connection") {
+                if (!binding.cameraSystemIds.has(binding.systemId)) {
+                    reportedRpmState.delete(binding.laneName);
+                }
                 updateLane(binding.laneName, (lane) => {
                     if (binding.cameraSystemIds.has(binding.systemId)) {
                         const camera = lane.cameras.find((candidate) => candidate.id === binding.systemId);
@@ -702,9 +723,9 @@ export function useLaneHealth() {
                                 candidate.id === binding.systemId ? {...candidate, state: "unknown"} : candidate),
                         };
                     }
-                    return lane.rpm.state === "unknown"
+                    return lane.rpm.state === "unknown" && !lane.deviceSilent
                         ? lane
-                        : {...lane, rpm: {...lane.rpm, state: "unknown"}};
+                        : {...lane, deviceSilent: false, rpm: {...lane.rpm, state: "unknown"}};
                 });
                 return;
             }
@@ -784,7 +805,10 @@ export function useLaneHealth() {
                         }),
                         streamIds.length,
                     );
-                    return fetchHealthQueryPage(query, signal, lowPriority);
+                    return fetchHealthQueryPage(query, signal, lowPriority, (serverMs) => {
+                        const drift = serverMs - Date.now();
+                        nodeClockOffsetMs.set(parentNode, Math.abs(drift) > 2_000 ? drift : 0);
+                    });
                 }, healthRequestControllers);
                 if (!active) return;
                 bindingsByStream.forEach((streamBindings) =>
@@ -839,12 +863,14 @@ export function useLaneHealth() {
             });
             heartbeatsByLane.forEach((laneBindings, laneName) => {
                 if (!laneBindings.every((binding) => respondedBindings.has(binding))) return;
+                const laneParentNode = laneBindings[0]?.parentNode;
+                const effectiveNow = now + (nodeClockOffsetMs.get(laneParentNode) ?? 0);
                 const newest = laneBindings.reduce<number | null>((latest, binding) =>
                     binding.lastAppliedTimestamp == null
                         ? latest
                         : Math.max(latest ?? 0, binding.lastAppliedTimestamp), null);
                 const {silent, state: rpmState} =
-                    deriveDeviceLiveness(newest, reportedRpmState.get(laneName), now);
+                    deriveDeviceLiveness(newest, reportedRpmState.get(laneName), effectiveNow);
                 updateLane(laneName, (lane) =>
                     lane.deviceSilent === silent && lane.lastDeviceDataAt === newest && lane.rpm.state === rpmState
                         ? lane

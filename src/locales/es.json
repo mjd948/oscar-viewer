@@ -118,6 +118,7 @@
   "videoNotSupported": "Su navegador no admite la etiqueta de vídeo.",
   "liveVideoPreparing": "Preparando el vídeo en directo… esperando un fotograma clave.",
   "liveVideoPlaybackError": "No se pudo reproducir el vídeo en directo.",
+  "liveVideoAutoRetry": "Reintentando automáticamente en {seconds} s.",
   "retry": "Reintentar",
   "noVideoAvailable": "No hay vídeo disponible",
   "retainedMediaLoading": "Buscando evidencia de cámara conservada…",

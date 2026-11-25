@@ -81,7 +81,7 @@ describe("Users, Passkeys & Access Control Console", () => {
                 keepSignedIn: true,
                 idleTimeoutSeconds: 0,
                 absoluteTimeoutSeconds: 0,
-                rpId: "oscar.local",
+                rpId: "portal.example.test",
                 rpIdSupported: true,
             },
         }).as("getSession");
@@ -90,7 +90,7 @@ describe("Users, Passkeys & Access Control Console", () => {
             req.reply({
                 statusCode: 200,
                 body: {
-                    rpId: "oscar.local",
+                    rpId: "portal.example.test",
                     rpIdSupported: true,
                     passkeyUserId: "dXNlcl9tYXJpYQ",
                     acceptedCredentialIds: passkeys.map((p) => p.id),
@@ -104,7 +104,7 @@ describe("Users, Passkeys & Access Control Console", () => {
             req.reply({
                 statusCode: 200,
                 body: {
-                    rpId: "oscar.local",
+                    rpId: "portal.example.test",
                     rpIdSupported: true,
                     passkeyUserId: "dXNlcl9tYXJpYQ",
                     acceptedCredentialIds: [],
@@ -174,7 +174,7 @@ describe("Users, Passkeys & Access Control Console", () => {
                 keepSignedIn: true,
                 idleTimeoutSeconds: 0,
                 absoluteTimeoutSeconds: 0,
-                rpId: "oscar.local",
+                rpId: "portal.example.test",
                 rpIdSupported: true,
             },
         }).as("getAdminSession");
@@ -182,7 +182,7 @@ describe("Users, Passkeys & Access Control Console", () => {
         cy.intercept({method: "GET", pathname: "/sensorhub/session/account/passkeys"}, {
             statusCode: 200,
             body: {
-                rpId: "oscar.local",
+                rpId: "portal.example.test",
                 rpIdSupported: true,
                 passkeyUserId: "YWRtaW5fdXNlcjAx",
                 acceptedCredentialIds: [],
@@ -205,7 +205,7 @@ describe("Users, Passkeys & Access Control Console", () => {
                         sameSite: "Lax",
                         secureCookie: true,
                         webAuthnRpId: "",
-                        effectiveRpId: "oscar.local",
+                        effectiveRpId: "portal.example.test",
                         rpIdSupported: true,
                         oidcEnabled: false,
                         oidcProviderName: "Organization SSO",
@@ -390,7 +390,7 @@ describe("Users, Passkeys & Access Control Console", () => {
                 statusCode: 200,
                 body: {
                     ...req.body,
-                    effectiveRpId: "oscar.local",
+                    effectiveRpId: "portal.example.test",
                     rpIdSupported: true,
                     oidcHasClientSecret: false,
                     trustedTunnelHasSharedSecret: false,
@@ -425,12 +425,12 @@ describe("Users, Passkeys & Access Control Console", () => {
                 username: "admin", displayName: "Administrator", primaryRole: "admin", roles: ["admin"], isAdmin: true,
                 canAdjudicate: true, isReadOnly: false, allowedViews: [], mustChangePassword: false,
                 passkeyUserId: "YWRtaW5fdXNlcjAx", passkeyCount: 0, authSource: "local", keepSignedIn: true,
-                idleTimeoutSeconds: 0, absoluteTimeoutSeconds: 0, rpId: "oscar.local", rpIdSupported: true,
+                idleTimeoutSeconds: 0, absoluteTimeoutSeconds: 0, rpId: "portal.example.test", rpIdSupported: true,
             },
         }).as("getAdminSession");
         cy.intercept({method: "GET", pathname: "/sensorhub/session/account/passkeys"}, {
             statusCode: 200,
-            body: {rpId: "oscar.local", rpIdSupported: true, passkeyUserId: "YWRtaW5fdXNlcjAx", acceptedCredentialIds: [], passkeys: []},
+            body: {rpId: "portal.example.test", rpIdSupported: true, passkeyUserId: "YWRtaW5fdXNlcjAx", acceptedCredentialIds: [], passkeys: []},
         });
         cy.intercept({method: "GET", pathname: "/sensorhub/session/admin/overview"}, (req) => {
             req.reply({statusCode: 200, body: {users, federationTokens: [], policy: {}, recovery: {}}});

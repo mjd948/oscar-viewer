@@ -118,6 +118,7 @@
   "videoNotSupported": "Your browser does not support the video tag.",
   "liveVideoPreparing": "Preparing live video… waiting for a keyframe.",
   "liveVideoPlaybackError": "Live video could not be played.",
+  "liveVideoAutoRetry": "Retrying automatically in {seconds} s.",
   "retry": "Retry",
   "noVideoAvailable": "No Video Available",
   "retainedMediaLoading": "Checking for retained camera evidence…",

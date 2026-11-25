@@ -1,6 +1,47 @@
 # OSCAR Viewer Change Log
 All notable changes to this project will be documented in this file. 
 
+## 3.11.15
+
+### Changed
+
+- Synchronized operator quick-guide titles, support-bundle fallback metadata, System Update fallback version (`3.11.15`), Video Guide `#31` summary asset names, `AGENTS.md` baseline references, and hardware-replacement recovery checklist references with **OSCAR 3.11.15**.
+
+## 3.11.14
+
+### Fixed
+
+- Updated `UsersAccessManager.tsx` so issuing a second temporary-password enrollment invite while the onboarding banner is already open updates the rendered one-time QR code and link to the newest invite immediately.
+- Added `30 s` detector-silence liveness verification in `useLaneHealth.ts` (`deriveDeviceLiveness`) across portal (`gammaCounts` / `neutronCounts`) and mobile (`LiveDriverLocationOutput` / Kromek D5 radiometric status) heartbeat streams while preserving `"unknown"` (`Waiting`) on zero-observation streams and compensating for workstation/server NTP clock drift (`> 2 s`) via HTTP `Date` response headers.
+- Switched `WebIdAnalysis.tsx` to `resultTime`-bounded CQL `occupancyObsId` lookups (with post-occupancy secondary-inspection fallback and `exactFilterSucceeded` short-circuiting so `0`-WebID occupancies never fall through to 2,500-row stream scans).
+- Disabled `hls.js` Web Worker transmuxing (`enableWorker: false`) in `HLSVideoComponent.tsx` for deterministic static-export CSP playback and added `[5 s, 15 s, 30 s, 60 s]` automatic retry backoff after terminal HLS playback errors.
+
+### Changed
+
+- Added `AGENTS.md`, `CLAUDE.md`, and `.github/PULL_REQUEST_TEMPLATE.md` documenting canonical operator routes, safety-critical global `AlarmAudio` invariants, bounded ConSys/DuckDB concurrency rules, and `v3.12.0` blueprints (`MobileDetectorSystem` UI and opt-in `/dashboards`).
+- Synchronized operator quick-guide titles, support-bundle fallback metadata, System Update fallback version (`3.11.14`), Video Guide `#31` summary asset names, and hardware-replacement recovery checklist references with **OSCAR 3.11.14**.
+
+## 3.11.13
+
+### Fixed
+
+- Gated `prewarmBucketCounts` on `countSettledRef.current` in `EventTableRequests.ts` (and incremented `prefetchEpoch` when `refreshCounts()` settles) so applying a selective Event Log filter never fans out premature per-bucket `/observations/count` queries using the prior unfiltered `rowCount` (`1.8M` rows) before the active filter's total count has resolved, eliminating background DuckDB `cold-cql-count` contention when operators immediately toggle `Priority` ↔ `Newest first`.
+
+### Changed
+
+- Synchronized operator quick-guide titles, support-bundle fallback metadata, System Update fallback version (`3.11.13`), Video Guide `#31` summary asset names, and hardware-replacement recovery checklist references with **OSCAR 3.11.13**.
+
+## 3.11.12
+
+### Fixed
+
+- Extended `buildEventBoundedPhenomenonTime` (`[start - 2s, end + 5s]`) across all unhydrated live observation ID lookup callers (`EventLookup.ts`, `SharedOccupancy.ts`, `BulkAdjudication.ts`, `EventPreview.tsx`, `AdjudicationDetail.tsx`) so live MQTT alarm lookups evaluate strictly against hot PostgreSQL storage (`0` Cold Parquet DuckDB sessions).
+
+### Changed
+
+- Simplified `EventTableRequests.ts` (`-122` net lines) by removing the redundant client-side `visitedPagesCacheRef` / `navigationDirectionRef` cache layer once `FederatedObsStore` offset pushdown and `OscarTieredObsStore` shallow-offset non-cold completeness (`offset = 15..270`) were resolved on the backend, relying cleanly on `disjointPriorityPlans` + `120 ms` settled rapid-click debounce + `AbortController` while retaining live MQTT `invalidatePrefetch()` suppression (`EventTable.tsx`).
+- Synchronized operator quick-guide titles, support-bundle fallback metadata, System Update fallback version (`3.11.12`), Video Guide `#31` summary asset names, and hardware-replacement recovery checklist references with **OSCAR 3.11.12**.
+
 ## 3.11.11
 
 ### Fixed

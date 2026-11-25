@@ -118,6 +118,7 @@
   "videoNotSupported": "Votre navigateur ne prend pas en charge la balise vidéo.",
   "liveVideoPreparing": "Préparation de la vidéo en direct… en attente d’une image clé.",
   "liveVideoPlaybackError": "La vidéo en direct n’a pas pu être lue.",
+  "liveVideoAutoRetry": "Nouvelle tentative automatique dans {seconds} s.",
   "retry": "Réessayer",
   "noVideoAvailable": "Aucune vidéo disponible",
   "retainedMediaLoading": "Recherche des preuves caméra conservées…",

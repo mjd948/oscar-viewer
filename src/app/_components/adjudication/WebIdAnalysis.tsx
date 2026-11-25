@@ -218,29 +218,56 @@ export default function WebIdAnalysis(props: {
 
         const startMs = Date.parse(props.event?.startTime ?? "");
         const endMs = Date.parse(props.event?.endTime ?? "");
+        const hasEventBounds = Number.isFinite(startMs) && Number.isFinite(endMs);
+        const windowStartIso = hasEventBounds
+            ? new Date(Math.max(0, Math.min(startMs, endMs) - 5 * 60_000)).toISOString()
+            : null;
+        const windowEndMs = hasEventBounds ? Math.max(startMs, endMs) + 30 * 60_000 : NaN;
+        const windowEndIso = hasEventBounds ? new Date(windowEndMs).toISOString() : null;
         let accumulated: WebIdAnalysisResult[] = [];
         let capped = false;
+        let exactFilterSucceeded = false;
 
-        // Exact match first: ask the server for this occupancy's results only. The unfiltered scan
-        // returns the stream oldest-first and stops after 25 pages, so on a busy node recent
-        // events' analyses were never read; the occupancy filter also keeps a secondary-inspection
-        // upload made hours after the event.
+        // Exact match first: ask the server for this occupancy's results only, bounded by resultTime
+        // (osh-js DataStream.searchObservations excludes phenomenonTime, and both inline WebIdOutput
+        // and secondary-inspection WebIdAnalyzer uploads record wall-clock resultTime >= startMs - 5m).
+        // Scoping by resultTime lets PostgreSQL use its (datastream_id, result_time) index, while
+        // exactFilterSucceeded avoids falling through to a 2,500-row full-stream scan on the >99% of
+        // routine occupancies that have zero WebID analyses.
         if (targetOccupancyObsId) {
+            const exactCql = `occupancyObsId='${String(targetOccupancyObsId).replace(/'/g, "''")}'`;
             try {
-                const exact = await readQueryPages(new ObservationFilter({
-                    filter: `occupancyObsId='${String(targetOccupancyObsId).replace(/'/g, "''")}'`,
-                }), MAX_SCAN_PAGES);
-                accumulated = exact.items;
-                capped = exact.capped;
+                if (windowStartIso && windowEndIso) {
+                    const primary = await readQueryPages(new ObservationFilter({
+                        resultTime: `${windowStartIso}/${windowEndIso}`,
+                        filter: exactCql,
+                    }), MAX_SCAN_PAGES);
+                    accumulated = primary.items;
+                    capped = primary.capped;
+
+                    if (accumulated.length === 0 && Date.now() > windowEndMs) {
+                        const late = await readQueryPages(new ObservationFilter({
+                            resultTime: `${windowEndIso}/${new Date(Date.now() + 5 * 60_000).toISOString()}`,
+                            filter: exactCql,
+                        }), MAX_SCAN_PAGES);
+                        accumulated = late.items;
+                        capped = late.capped;
+                    }
+                } else {
+                    const exact = await readQueryPages(new ObservationFilter({
+                        filter: exactCql,
+                    }), MAX_SCAN_PAGES);
+                    accumulated = exact.items;
+                    capped = exact.capped;
+                }
+                exactFilterSucceeded = true;
             } catch (error) {
                 console.warn("Filtered WebID query failed; falling back to a time window", error);
             }
         }
 
-        if (accumulated.length === 0 && Number.isFinite(startMs) && Number.isFinite(endMs)) {
+        if (!exactFilterSucceeded && accumulated.length === 0 && windowStartIso && windowEndIso) {
             try {
-                const windowStartIso = new Date(Math.max(0, Math.min(startMs, endMs) - 5 * 60_000)).toISOString();
-                const windowEndIso = new Date(Math.max(startMs, endMs) + 30 * 60_000).toISOString();
                 const scoped = await readQueryPages(
                     new ObservationFilter({ resultTime: `${windowStartIso}/${windowEndIso}` }),
                     MAX_SCAN_PAGES,
@@ -257,7 +284,7 @@ export default function WebIdAnalysis(props: {
             }
         }
 
-        if (accumulated.length === 0) {
+        if (!exactFilterSucceeded && accumulated.length === 0) {
             const fallback = await readQueryPages(undefined, MAX_SCAN_PAGES);
             accumulated = fallback.items;
             capped = fallback.capped;

@@ -181,7 +181,6 @@ export interface UseAbortableEventQueriesArgs {
 
 const DEFAULT_PAGE_CHANGE_DEBOUNCE_MS = 120;
 const BUCKET_COUNTS_PREWARM_DELAY_MS = 0;
-const MAX_VISITED_PAGE_CACHE_ENTRIES = 64;
 
 function buildBucketCountsCacheKey(
     effectiveCutoff: string,
@@ -342,8 +341,6 @@ export function useAbortableEventQueries({
         controller: AbortController;
     } | null>(null);
     const nextPagePrefetchRef = useRef<NextPagePrefetchEntry | null>(null);
-    const visitedPagesCacheRef = useRef<Map<string, EventTableData[]>>(new Map());
-    const navigationDirectionRef = useRef<1 | -1>(1);
     const maybeStartNextPagePrefetchRef = useRef<() => void>(() => {});
     const rowFilterRef = useRef(rowFilter);
     const sortComparatorRef = useRef(sortComparator);
@@ -351,18 +348,6 @@ export function useAbortableEventQueries({
     rowFilterRef.current = rowFilter;
     sortComparatorRef.current = sortComparator;
     extraFetchRowsRef.current = extraFetchRows;
-
-    const cacheVisitedPage = useCallback((cacheKey: string | null, pageRows: EventTableData[]) => {
-        if (!prefetchNextPage || !cacheKey) return;
-        const map = visitedPagesCacheRef.current;
-        map.delete(cacheKey);
-        map.set(cacheKey, pageRows);
-        while (map.size > MAX_VISITED_PAGE_CACHE_ENTRIES) {
-            const oldestKey = map.keys().next().value;
-            if (oldestKey === undefined) break;
-            map.delete(oldestKey);
-        }
-    }, [prefetchNextPage]);
 
     const clearPendingPageDebounce = useCallback(() => {
         if (pageDebounceTimerRef.current !== null && typeof window !== "undefined") {
@@ -380,7 +365,6 @@ export function useAbortableEventQueries({
 
     const invalidatePrefetch = useCallback(() => {
         prefetchInvalidationRef.current += 1;
-        visitedPagesCacheRef.current.clear();
         clearNextPagePrefetch();
         if (prefetchNextPage) {
             setPrefetchEpoch(previous => previous + 1);
@@ -426,7 +410,6 @@ export function useAbortableEventQueries({
         if (cutoffOverride !== undefined) {
             activeCutoffRef.current = cutoffOverride;
             prefetchInvalidationRef.current += 1;
-            visitedPagesCacheRef.current.clear();
             clearNextPagePrefetch();
         }
         const effectiveCutoff = cutoffOverride ?? activeCutoffRef.current;
@@ -458,6 +441,9 @@ export function useAbortableEventQueries({
             rowCountRef.current = total;
             setRowCount(total);
             setCountQueryError(false);
+            if (prewarmBucketCounts || prefetchNextPage) {
+                setPrefetchEpoch(previous => previous + 1);
+            }
         } catch (error) {
             if (
                 controller.signal.aborted
@@ -472,18 +458,16 @@ export function useAbortableEventQueries({
                 countAbortRef.current = null;
             }
         }
-    }, [clearNextPagePrefetch, queryPlans, fetchPlanCount]);
+    }, [clearNextPagePrefetch, queryPlans, fetchPlanCount, prewarmBucketCounts, prefetchNextPage]);
 
     const fetchPage = useCallback(async (targetPage: number, cutoffOverride?: string, minExtraRows = 0) => {
         clearPendingPageDebounce();
         if (cutoffOverride !== undefined) {
             activeCutoffRef.current = cutoffOverride;
             prefetchInvalidationRef.current += 1;
-            visitedPagesCacheRef.current.clear();
             clearNextPagePrefetch();
         } else if (minExtraRows > 0) {
             prefetchInvalidationRef.current += 1;
-            visitedPagesCacheRef.current.clear();
             clearNextPagePrefetch();
         }
         const effectiveCutoff = cutoffOverride ?? activeCutoffRef.current;
@@ -519,30 +503,6 @@ export function useAbortableEventQueries({
                 invalidationVersion: prefetchInvalidationRef.current,
             })
             : null;
-
-        if (prefetchNextPage && targetPage >= 1 && expectedPrefetchKey) {
-            const cachedVisited = visitedPagesCacheRef.current.get(expectedPrefetchKey);
-            if (cachedVisited !== undefined) {
-                cacheVisitedPage(expectedPrefetchKey, cachedVisited);
-                if (nextPagePrefetchRef.current && nextPagePrefetchRef.current.key !== expectedPrefetchKey) {
-                    clearNextPagePrefetch();
-                } else if (nextPagePrefetchRef.current?.key === expectedPrefetchKey) {
-                    nextPagePrefetchRef.current = null;
-                }
-                pageAbortRef.current = null;
-                renderedPageRef.current = targetPage;
-                currentPageRef.current = targetPage;
-                rowsLengthRef.current = cachedVisited.length;
-                loadingRef.current = false;
-                pageQueryErrorRef.current = false;
-                setRows(cachedVisited);
-                setPageQueryError(false);
-                setLoading(false);
-                setPrefetchEpoch(previous => previous + 1);
-                return;
-            }
-        }
-
         const matchingPrefetch = expectedPrefetchKey && nextPagePrefetchRef.current?.key === expectedPrefetchKey
             ? nextPagePrefetchRef.current
             : null;
@@ -552,9 +512,6 @@ export function useAbortableEventQueries({
 
         if (matchingPrefetch && matchingPrefetch.rows !== null) {
             const prefetchedRows = matchingPrefetch.rows;
-            if (targetPage >= 1) {
-                cacheVisitedPage(expectedPrefetchKey, prefetchedRows);
-            }
             pageAbortRef.current = null;
             nextPagePrefetchRef.current = null;
             renderedPageRef.current = targetPage;
@@ -583,9 +540,6 @@ export function useAbortableEventQueries({
                     const awaitedRows = await matchingPrefetch.promise;
                     if (controller.signal.aborted || requestId !== pageRequestRef.current) return;
                     if (awaitedRows !== null) {
-                        if (targetPage >= 1) {
-                            cacheVisitedPage(expectedPrefetchKey, awaitedRows);
-                        }
                         renderedPageRef.current = targetPage;
                         currentPageRef.current = targetPage;
                         rowsLengthRef.current = awaitedRows.length;
@@ -619,9 +573,6 @@ export function useAbortableEventQueries({
                 );
                 if (controller.signal.aborted || requestId !== pageRequestRef.current) return;
                 const deduped = deduplicateEvents(pageRows);
-                if (targetPage >= 1) {
-                    cacheVisitedPage(expectedPrefetchKey, deduped);
-                }
                 renderedPageRef.current = targetPage;
                 currentPageRef.current = targetPage;
                 rowsLengthRef.current = deduped.length;
@@ -672,7 +623,6 @@ export function useAbortableEventQueries({
                     const slicePlans = sliceDisjointBucketPlans(pageQueryPlans, bucketCounts, targetPage, pageSize);
                     if (slicePlans.length === 0) {
                         if (controller.signal.aborted || requestId !== pageRequestRef.current) return;
-                        cacheVisitedPage(expectedPrefetchKey, []);
                         renderedPageRef.current = targetPage;
                         currentPageRef.current = targetPage;
                         rowsLengthRef.current = 0;
@@ -694,7 +644,6 @@ export function useAbortableEventQueries({
                     );
                     if (controller.signal.aborted || requestId !== pageRequestRef.current) return;
                     const slicedRows = deduplicateEvents(sliceResults.flat()).slice(0, pageSize);
-                    cacheVisitedPage(expectedPrefetchKey, slicedRows);
                     renderedPageRef.current = targetPage;
                     currentPageRef.current = targetPage;
                     rowsLengthRef.current = slicedRows.length;
@@ -717,9 +666,6 @@ export function useAbortableEventQueries({
             const filtered = activeRowFilter ? deduped.filter(activeRowFilter) : deduped;
             const merged = filtered.sort(sortComparatorRef.current);
             const pageSlice = merged.slice(targetPage * pageSize, required);
-            if (targetPage >= 1) {
-                cacheVisitedPage(expectedPrefetchKey, pageSlice);
-            }
             renderedPageRef.current = targetPage;
             currentPageRef.current = targetPage;
             rowsLengthRef.current = pageSlice.length;
@@ -750,7 +696,6 @@ export function useAbortableEventQueries({
             }
         }
     }, [
-        cacheVisitedPage,
         clearNextPagePrefetch,
         clearPendingPageDebounce,
         disjointPriorityPlans,
@@ -778,17 +723,10 @@ export function useAbortableEventQueries({
             return;
         }
 
-        const direction = navigationDirectionRef.current;
-        const nextPage = direction < 0 ? currentPage - 1 : currentPage + 1;
-        if (nextPage < 1) {
-            return;
-        }
+        const nextPage = currentPage + 1;
         const singlePlanUnfiltered = pageQueryPlans.length === 1 && !filterModeActive;
         const hasKnownMoreRows = rowCountRef.current > nextPage * pageSize;
-        const hasPendingCountFullPage = !countSettledRef.current && (
-            (singlePlanUnfiltered && rowsLengthRef.current >= pageSize)
-            || nextPage < currentPage
-        );
+        const hasPendingCountFullPage = !countSettledRef.current && singlePlanUnfiltered && rowsLengthRef.current >= pageSize;
         if (!hasKnownMoreRows && !hasPendingCountFullPage) {
             return;
         }
@@ -810,10 +748,7 @@ export function useAbortableEventQueries({
             invalidationVersion: prefetchInvalidationRef.current,
         });
 
-        if (
-            visitedPagesCacheRef.current.has(prefetchKey)
-            || nextPagePrefetchRef.current?.key === prefetchKey
-        ) {
+        if (nextPagePrefetchRef.current?.key === prefetchKey) {
             return;
         }
 
@@ -928,8 +863,6 @@ export function useAbortableEventQueries({
         clearPendingPageDebounce();
         clearPendingBucketPrewarm();
         clearNextPagePrefetch();
-        visitedPagesCacheRef.current.clear();
-        navigationDirectionRef.current = 1;
         activeCutoffRef.current = pageLoadedTime;
         lastPageChangeMsRef.current = -Infinity;
         const snap = cachedSnapshotRef.current;
@@ -952,24 +885,6 @@ export function useAbortableEventQueries({
                 };
             } else {
                 bucketCountsCacheRef.current = null;
-            }
-            if (snap.page >= 1) {
-                const requestedExtra = extraFetchRowsRef.current || 0;
-                const boundedExtra = filterModeActive
-                    ? Math.max(0, Math.min(requestedExtra, 50))
-                    : 0;
-                const snapKey = buildNextPagePrefetchKey({
-                    targetPage: snap.page,
-                    pageSize,
-                    effectiveCutoff: pageLoadedTime,
-                    plans: pageQueryPlans,
-                    phenomenonTimeForCutoff,
-                    disjointPriorityPlans,
-                    filterModeActive,
-                    boundedExtra,
-                    invalidationVersion: prefetchInvalidationRef.current,
-                });
-                cacheVisitedPage(snapKey, snap.rows);
             }
             countSettledRef.current = true;
             renderedPageRef.current = snap.page;
@@ -994,17 +909,13 @@ export function useAbortableEventQueries({
         void refreshCounts();
         void fetchPage(targetPage);
     }, [
-        cacheVisitedPage,
         clearNextPagePrefetch,
         clearPendingPageDebounce,
         clearPendingBucketPrewarm,
-        disjointPriorityPlans,
-        filterModeActive,
         refreshCounts,
         fetchPage,
         pageLoadedTime,
         pageQueryPlans,
-        pageSize,
         phenomenonTimeForCutoff,
     ]);
 
@@ -1015,6 +926,7 @@ export function useAbortableEventQueries({
             || !disjointPriorityPlans
             || filterModeActive
             || pageQueryPlans.length <= 1
+            || !countSettledRef.current
             || rowCount <= pageSize
             || typeof window === "undefined"
             || (snap !== null && snap.pageLoadedTime === pageLoadedTime && !snap.bucketCounts)
@@ -1095,7 +1007,6 @@ export function useAbortableEventQueries({
         previousPageRef.current = page;
         currentPageRef.current = page;
         if (page !== previousPage) {
-            navigationDirectionRef.current = page < previousPage ? -1 : 1;
             const snap = cachedSnapshotRef.current;
             if (snap && snap.pageLoadedTime === pageLoadedTime && snap.page === page && pageQueryPlans.length > 0) {
                 clearPendingPageDebounce();
@@ -1134,31 +1045,6 @@ export function useAbortableEventQueries({
                 setLoading(false);
                 return;
             }
-            // Instant 0ms render without debounce if targetPage >= 1 is already in visitedPagesCacheRef or resolved in nextPagePrefetchRef
-            if (prefetchNextPage && page >= 1) {
-                const requestedExtra = extraFetchRowsRef.current || 0;
-                const boundedExtra = filterModeActive
-                    ? Math.max(0, Math.min(requestedExtra, 50))
-                    : 0;
-                const targetKey = buildNextPagePrefetchKey({
-                    targetPage: page,
-                    pageSize,
-                    effectiveCutoff: activeCutoffRef.current,
-                    plans: pageQueryPlans,
-                    phenomenonTimeForCutoff,
-                    disjointPriorityPlans,
-                    filterModeActive,
-                    boundedExtra,
-                    invalidationVersion: prefetchInvalidationRef.current,
-                });
-                if (
-                    visitedPagesCacheRef.current.has(targetKey)
-                    || (nextPagePrefetchRef.current?.key === targetKey && nextPagePrefetchRef.current.rows !== null)
-                ) {
-                    void fetchPage(page);
-                    return;
-                }
-            }
             if (pageChangeDebounceMs <= 0 || typeof window === "undefined" || !rapidFollowUp) {
                 void fetchPage(page);
                 return;
@@ -1173,20 +1059,7 @@ export function useAbortableEventQueries({
         return () => {
             clearPendingPageDebounce();
         };
-    }, [
-        page,
-        fetchPage,
-        clearNextPagePrefetch,
-        clearPendingPageDebounce,
-        disjointPriorityPlans,
-        filterModeActive,
-        pageChangeDebounceMs,
-        pageLoadedTime,
-        pageQueryPlans,
-        pageSize,
-        phenomenonTimeForCutoff,
-        prefetchNextPage,
-    ]);
+    }, [page, fetchPage, clearNextPagePrefetch, clearPendingPageDebounce, pageChangeDebounceMs, pageLoadedTime, pageQueryPlans.length]);
 
     useEffect(() => {
         maybeStartNextPagePrefetch();
